@@ -37,6 +37,70 @@ The module prefix is detected with `go list -m` and stripped from displayed path
 
 `go-cov` intentionally does not expose `go test -coverpkg`. Coverage should use Go's default package coverage universe for the selected packages, with policy exceptions expressed as explicit excludes.
 
+## Configuration
+
+By default, `go-cov` reads `.go-cov.toml` from the current working directory. Use `--config path/to/file.toml` to load a different file.
+
+Configuration precedence is:
+
+```text
+defaults < config file < environment variables < flags
+```
+
+Example:
+
+```toml
+[thresholds]
+total = 85
+function = 50
+package = 70
+print = 85
+
+[test]
+timeout = "15m"
+race = false
+tags = ["sqlite_fts5", "race_heavy"]
+
+[exclude]
+packages = [
+  "borgee-server/scripts/",
+  "borgee-server/cmd",
+  "borgee-server/internal/testutil",
+  "borgee-server/internal/api/cm5stance",
+  "borgee-server/internal/testutil/regression_suite",
+]
+files = ["internal/testutil/", "main.go"]
+funcs = []
+
+[html]
+enabled = false
+path = ".coverage/test_coverage.html"
+
+[critical_blocks]
+fail = false
+```
+
+Supported config keys:
+
+- `thresholds.function`
+- `thresholds.package`
+- `thresholds.print`
+- `thresholds.total`
+- `test.timeout`
+- `test.race`
+- `test.tags`
+- `exclude.packages`
+- `exclude.files`
+- `exclude.funcs`
+- `html.enabled`
+- `html.path`
+- `critical_blocks.fail`
+
+Optional metadata keys:
+
+- `project`
+- `module_prefix`
+
 ## Environment Compatibility
 
 The CLI also reads the existing environment variables used by the in-repo scripts:

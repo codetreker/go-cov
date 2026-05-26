@@ -182,6 +182,16 @@ func DefaultConfig() Config {
 // ConfigFromEnv parses configuration from environment variables and CLI arguments.
 func ConfigFromEnv(args []string) (Config, error) {
 	c := DefaultConfig()
+	configPath, explicitConfig, remainingArgs, err := extractConfigArg(args)
+	if err != nil {
+		return Config{}, err
+	}
+	if configPath == "" {
+		configPath = ".go-cov.toml"
+	}
+	if err := applyConfigFile(&c, configPath, explicitConfig); err != nil {
+		return Config{}, err
+	}
 
 	// Override from environment first; flags win below.
 	if v := os.Getenv("COVERPROFILE"); v != "" {
@@ -252,6 +262,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 
 	fs := flag.NewFlagSet("go-cov", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
+	fs.String("config", configPath, "config file path")
 	modulePrefix := fs.String("module-prefix", c.ModulePrefix, "module import prefix to strip from output paths")
 	projectName := fs.String("project", c.ProjectName, "project name used for default local HTML output")
 	coverProfile := fs.String("coverprofile", c.CoverProfile, "coverage profile path")
@@ -273,7 +284,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 	failOnCriticalBlocks := fs.Bool("fail-on-critical-blocks", c.FailOnCriticalBlocks, "fail CI on AST critical uncovered blocks")
 	showTestCounts := fs.Bool("show-test-counts", c.ShowTestCounts, "show TESTS column in package summary")
 
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(remainingArgs); err != nil {
 		return Config{}, err
 	}
 	projectFlagSet := false

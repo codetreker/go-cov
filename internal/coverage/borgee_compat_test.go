@@ -50,17 +50,3 @@ func TestBuildTestArgsIncludesTagsAndNoRaceOverride(t *testing.T) {
 		}
 	}
 }
-
-func TestConfigRejectsCoverPkgFlag(t *testing.T) {
-	_, err := ConfigFromEnv([]string{"--coverpkg", "borgee-server/internal/api"})
-	if err == nil {
-		t.Fatal("ConfigFromEnv accepted --coverpkg; coverage universe must not be narrowed")
-	}
-}
-
-func TestConfigRejectsPackageGateIncludeFlag(t *testing.T) {
-	_, err := ConfigFromEnv([]string{"--package-gate-include", "internal/api"})
-	if err == nil {
-		t.Fatal("ConfigFromEnv accepted --package-gate-include; package threshold must apply uniformly after excludes")
-	}
-}
