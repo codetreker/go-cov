@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	coverage "github.com/codetreker/go-cov"
+	"github.com/codetreker/go-cov/internal/coverage"
 )
 
 func main() {

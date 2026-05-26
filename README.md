@@ -4,6 +4,15 @@ Reusable Go coverage runner and reporter extracted from Haystack and Syntrix.
 
 It runs `go test -json` with coverage, prints package/function summaries, generates a local HTML report, and ranks uncovered blocks with a lightweight AST analysis.
 
+The repo is CLI-first. Implementation packages live under `internal/` so consumers depend on the command contract instead of an unstable Go API.
+
+## Layout
+
+```text
+cmd/go-cov/          CLI entrypoint
+internal/coverage/   runner, parsers, reports, and AST analysis
+```
+
 ## Usage
 
 Run from the root of a Go module:
