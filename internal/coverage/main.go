@@ -60,6 +60,9 @@ type TestEvent struct {
 	Test    string  `json:"Test"`
 	Output  string  `json:"Output"`
 	Elapsed float64 `json:"Elapsed"`
+	// ImportPath is set on build-output/build-fail events, which carry no Package.
+	// It looks like "example.com/mod/pkg [example.com/mod/pkg.test]".
+	ImportPath string `json:"ImportPath"`
 }
 
 // PackageResult holds test results for a package
@@ -416,12 +419,26 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 	// Key: "pkg/test" or just "pkg" for package-level output
 	testOutputs := make(map[string][]string)
 
+	// Buffer compiler/vet errors per package. These arrive as build-output events
+	// that carry an ImportPath (not a Package) and are otherwise lost when the
+	// package later reports a build failure.
+	buildOutputs := make(map[string][]string)
+
 	for {
 		var event TestEvent
 		if err := decoder.Decode(&event); err != nil {
 			if err == io.EOF {
 				break
 			}
+			continue
+		}
+
+		// Build failures stream their detail as build-output events keyed by
+		// ImportPath, with an empty Package. Buffer them under the package name so
+		// they can be printed when the package's fail event arrives.
+		if event.Action == "build-output" {
+			bpkg := buildFailurePackage(event.ImportPath)
+			buildOutputs[bpkg] = append(buildOutputs[bpkg], event.Output)
 			continue
 		}
 
@@ -484,6 +501,26 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 			delete(testOutputs, outputKey)
 		}
 
+		// On package-level failure, surface the reason: a build error if the
+		// package failed to compile, otherwise any buffered package-scope output
+		// (e.g. a panic in a goroutine or output before a crash) that was never
+		// attributed to an individual test.
+		if event.Action == "fail" && event.Test == "" {
+			if bo, ok := buildOutputs[pkg]; ok {
+				fmt.Printf("\n=== BUILD FAILED: %s ===\n", pkg)
+				for _, out := range bo {
+					fmt.Print(out)
+				}
+				delete(buildOutputs, pkg)
+			} else if outputs, ok := testOutputs[pkg]; ok && len(outputs) > 0 {
+				fmt.Printf("\n=== FAIL: %s ===\n", pkg)
+				for _, out := range outputs {
+					fmt.Print(out)
+				}
+			}
+			delete(testOutputs, pkg)
+		}
+
 		// Clean up on pass
 		if event.Action == "pass" && event.Test != "" {
 			delete(testOutputs, outputKey)
@@ -497,6 +534,17 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 	}
 
 	return resultSlice, topLevelCounts, subTestCounts
+}
+
+// buildFailurePackage extracts the display package name from a build event's
+// ImportPath, e.g. "example.com/mod/pkg [example.com/mod/pkg.test]" -> "pkg"
+// after the module prefix is stripped.
+func buildFailurePackage(importPath string) string {
+	pkg := importPath
+	if idx := strings.Index(pkg, " ["); idx != -1 {
+		pkg = pkg[:idx]
+	}
+	return strings.TrimPrefix(strings.TrimSpace(pkg), cfg.ModulePrefix)
 }
 
 // parsePackageResult parses a single package result line
