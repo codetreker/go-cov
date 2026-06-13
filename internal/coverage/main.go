@@ -507,16 +507,10 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 		// attributed to an individual test.
 		if event.Action == "fail" && event.Test == "" {
 			if bo, ok := buildOutputs[pkg]; ok {
-				fmt.Printf("\n=== BUILD FAILED: %s ===\n", pkg)
-				for _, out := range bo {
-					fmt.Print(out)
-				}
+				printBuildFailure(pkg, bo)
 				delete(buildOutputs, pkg)
 			} else if outputs, ok := testOutputs[pkg]; ok && len(outputs) > 0 {
-				fmt.Printf("\n=== FAIL: %s ===\n", pkg)
-				for _, out := range outputs {
-					fmt.Print(out)
-				}
+				printPackageFailure(pkg, outputs)
 			}
 			delete(testOutputs, pkg)
 		}
@@ -545,6 +539,83 @@ func buildFailurePackage(importPath string) string {
 		pkg = pkg[:idx]
 	}
 	return strings.TrimPrefix(strings.TrimSpace(pkg), cfg.ModulePrefix)
+}
+
+// printBuildFailure reports a package that failed to compile. In CI mode each
+// compiler error becomes a GitHub Actions annotation pinned to its file/line;
+// locally it prints a human-readable block.
+func printBuildFailure(pkg string, lines []string) {
+	if cfg.CIMode {
+		for _, out := range lines {
+			if file, lineNo, msg, ok := parseCompilerError(out); ok {
+				fmt.Printf("::error file=%s,line=%s::%s\n", file, lineNo, msg)
+			} else if strings.TrimSpace(out) != "" {
+				fmt.Print(out)
+			}
+		}
+		return
+	}
+	fmt.Printf("\n=== BUILD FAILED: %s ===\n", pkg)
+	for _, out := range lines {
+		fmt.Print(out)
+	}
+}
+
+// printPackageFailure reports package-scope failure output (a panic or other
+// output not attributed to a single test). In CI mode it is prefixed with a
+// GitHub Actions error annotation.
+func printPackageFailure(pkg string, lines []string) {
+	if cfg.CIMode {
+		fmt.Printf("::error::package %s failed\n", pkg)
+	} else {
+		fmt.Printf("\n=== FAIL: %s ===\n", pkg)
+	}
+	for _, out := range lines {
+		fmt.Print(out)
+	}
+}
+
+// parseCompilerError parses a Go compiler diagnostic of the form
+// "file:line[:col]: message". The optional column is dropped.
+func parseCompilerError(line string) (file, lineNo, msg string, ok bool) {
+	s := strings.TrimRight(line, "\r\n")
+
+	i1 := strings.IndexByte(s, ':')
+	if i1 <= 0 {
+		return "", "", "", false
+	}
+	rest := s[i1+1:]
+
+	i2 := strings.IndexByte(rest, ':')
+	if i2 < 0 {
+		return "", "", "", false
+	}
+	lineNo = rest[:i2]
+	if !isAllDigits(lineNo) {
+		return "", "", "", false
+	}
+
+	file = s[:i1]
+	after := rest[i2+1:] // either "col: message" or " message"
+	if j := strings.IndexByte(after, ':'); j >= 0 && isAllDigits(after[:j]) {
+		msg = strings.TrimSpace(after[j+1:])
+	} else {
+		msg = strings.TrimSpace(after)
+	}
+	return file, lineNo, msg, true
+}
+
+// isAllDigits reports whether s is non-empty and contains only ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // parsePackageResult parses a single package result line

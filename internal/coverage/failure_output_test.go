@@ -55,6 +55,30 @@ func TestParseTestOutputPrintsBuildFailureDetails(t *testing.T) {
 	}
 }
 
+// In CI mode a build failure must become a GitHub Actions error annotation
+// pinned to the offending file and line.
+func TestParseTestOutputEmitsCIErrorAnnotationForBuildFailure(t *testing.T) {
+	cfg = Config{ModulePrefix: "covdemo/", CIMode: true}
+
+	input := strings.Join([]string{
+		`{"ImportPath":"covdemo/sub [covdemo/sub.test]","Action":"build-output","Output":"# covdemo/sub [covdemo/sub.test]\n"}`,
+		`{"ImportPath":"covdemo/sub [covdemo/sub.test]","Action":"build-output","Output":"sub/sub.go:4:9: undefined: notAFunction\n"}`,
+		`{"ImportPath":"covdemo/sub [covdemo/sub.test]","Action":"build-fail"}`,
+		`{"Action":"start","Package":"covdemo/sub"}`,
+		`{"Action":"output","Package":"covdemo/sub","Output":"FAIL\tcovdemo/sub [build failed]\n"}`,
+		`{"Action":"fail","Package":"covdemo/sub","FailedBuild":"covdemo/sub [covdemo/sub.test]"}`,
+	}, "\n")
+
+	out := captureStdout(t, func() {
+		parseTestOutput(strings.NewReader(input))
+	})
+
+	want := "::error file=sub/sub.go,line=4::undefined: notAFunction"
+	if !strings.Contains(out, want) {
+		t.Fatalf("missing CI error annotation %q in output:\n%s", want, out)
+	}
+}
+
 // Package-level failure output (e.g. a panic outside any single test) must be surfaced.
 func TestParseTestOutputPrintsPackageLevelFailureDetails(t *testing.T) {
 	cfg = Config{ModulePrefix: "covdemo/"}
