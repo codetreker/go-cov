@@ -33,7 +33,7 @@ go run github.com/codetreker/go-cov/cmd/go-cov@latest \
   --html-out ".myproject/test_coverage.html"
 ```
 
-The module prefix is detected with `go list -m` and stripped from displayed paths. Override it with `--module-prefix` when needed.
+The module prefix is detected with `go list -m` and stripped from displayed paths. In a Go workspace (`go.work`) every main module's prefix is detected and the longest match is stripped, so packages from all workspace modules are shortened correctly. Override detection with `--module-prefix` when needed (an explicit prefix is used verbatim and disables auto-detection).
 
 `go-cov` intentionally does not expose `go test -coverpkg`. Coverage should use Go's default package coverage universe for the selected packages, with policy exceptions expressed as explicit excludes.
 
@@ -71,6 +71,7 @@ packages = [
 ]
 files = ["internal/testutil/", "main.go"]
 funcs = []
+func_suffixes = ["ForTest"]
 
 [html]
 enabled = false
@@ -92,6 +93,7 @@ Supported config keys:
 - `exclude.packages`
 - `exclude.files`
 - `exclude.funcs`
+- `exclude.func_suffixes`
 - `html.enabled`
 - `html.path`
 - `critical_blocks.fail`
@@ -100,6 +102,8 @@ Optional metadata keys:
 
 - `project`
 - `module_prefix`
+
+`exclude.func_suffixes` defaults to `["ForTest"]` (test helpers that live in non-test files). Set it to `[]` to disable, or override it with your own suffixes.
 
 ## Environment Compatibility
 
@@ -116,6 +120,7 @@ The CLI also reads the existing environment variables used by the in-repo script
 - `SKIP_RESULT_PACKAGES`
 - `EXCLUDE_FILES`
 - `EXCLUDE_FUNCS`
+- `EXCLUDE_FUNC_SUFFIXES`
 - `MODULE_PREFIX`
 - `PROJECT_NAME`
 - `HTML_OUT`

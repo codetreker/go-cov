@@ -28,12 +28,14 @@ type Config struct {
 	// Behavior
 	CIMode               bool     // Enable CI mode (GitHub Actions error format, fail on CRITICAL)
 	RaceDetection        bool     // Enable -race flag
-	ModulePrefix         string   // Go module import prefix stripped from display paths
+	ModulePrefix         string   // Primary Go module import prefix stripped from display paths
+	ModulePrefixes       []string // All main-module prefixes to strip (covers Go workspaces); longest match wins
 	ProjectName          string   // Project name used for default local HTML output
 	ExcludePackages      []string // Packages to exclude by substring
 	SkipResultPackages   []string // Package display names to skip from summaries by substring
 	ExcludeFiles         []string // File path substrings to exclude from function/block reports
 	ExcludeFuncs         []string // Function names to exclude from coverage threshold
+	ExcludeFuncSuffixes  []string // Function name suffixes to exclude (e.g. "ForTest" helpers)
 	CoverProfile         string   // Coverage profile path
 	HTMLPath             string   // HTML coverage report output path
 	TestTimeout          string   // go test timeout value
@@ -42,6 +44,24 @@ type Config struct {
 	FailOnCriticalBlocks bool     // In CI mode, fail on AST critical uncovered blocks
 	UncoveredLimit       int      // Max uncovered blocks to show
 	ShowTestCounts       bool     // Show TESTS column in package summary
+}
+
+// stripModulePrefix removes the longest matching main-module import-path prefix
+// from s so displayed package and file paths are relative to their module root.
+// It falls back to ModulePrefix when ModulePrefixes is unset, and returns s
+// unchanged when nothing matches (e.g. no module detected, or a third-party path).
+func (c Config) stripModulePrefix(s string) string {
+	prefixes := c.ModulePrefixes
+	if len(prefixes) == 0 && c.ModulePrefix != "" {
+		prefixes = []string{c.ModulePrefix}
+	}
+	best := ""
+	for _, p := range prefixes {
+		if p != "" && len(p) > len(best) && strings.HasPrefix(s, p) {
+			best = p
+		}
+	}
+	return strings.TrimPrefix(s, best)
 }
 
 // ANSI color codes
@@ -89,6 +109,18 @@ var cfg Config
 // Run executes the coverage workflow and returns a process-style exit code.
 func Run(c Config) int {
 	cfg = normalizeConfig(c)
+
+	profile, cleanup, err := resolveCoverProfile(cfg.CoverProfile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating coverage profile: %v\n", err)
+		return 1
+	}
+	cfg.CoverProfile = profile
+	defer cleanup()
+
+	if len(cfg.ModulePrefixes) == 0 && cfg.ModulePrefix == "" {
+		fmt.Fprintln(os.Stderr, "go-cov: no module path detected; displayed paths will not be shortened. Pass --module-prefix to set one.")
+	}
 
 	fmt.Println()
 	startTime := time.Now()
@@ -144,8 +176,12 @@ func Run(c Config) int {
 
 // DefaultConfig returns conservative defaults suitable for most Go projects.
 func DefaultConfig() Config {
-	modulePath := detectModulePath()
-	projectName := projectNameFromModule(modulePath)
+	modulePaths := detectModulePaths()
+	primaryModule := ""
+	if len(modulePaths) > 0 {
+		primaryModule = modulePaths[0]
+	}
+	projectName := projectNameFromModule(primaryModule)
 
 	c := Config{
 		ThresholdFunc:        80.0,
@@ -154,13 +190,15 @@ func DefaultConfig() Config {
 		ThresholdTotal:       90.0,
 		CIMode:               os.Getenv("CI") == "true",
 		RaceDetection:        false,
-		ModulePrefix:         normalizeModulePrefix(modulePath),
+		ModulePrefix:         normalizeModulePrefix(primaryModule),
+		ModulePrefixes:       normalizeModulePrefixes(modulePaths),
 		ProjectName:          projectName,
 		ExcludePackages:      nil,
 		SkipResultPackages:   nil,
 		ExcludeFiles:         nil,
 		ExcludeFuncs:         nil,
-		CoverProfile:         "/tmp/coverage.out",
+		ExcludeFuncSuffixes:  []string{"ForTest"},
+		CoverProfile:         "", // empty => a unique temp file is allocated per run
 		HTMLPath:             defaultHTMLPath(projectName),
 		TestTimeout:          "15m",
 		BuildTags:            "",
@@ -202,6 +240,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 	}
 	if v := os.Getenv("MODULE_PREFIX"); v != "" {
 		c.ModulePrefix = normalizeModulePrefix(v)
+		c.ModulePrefixes = []string{c.ModulePrefix} // explicit prefix overrides auto-detection
 	}
 	if v := os.Getenv("PROJECT_NAME"); v != "" {
 		c.ProjectName = v
@@ -247,6 +286,9 @@ func ConfigFromEnv(args []string) (Config, error) {
 	if v := os.Getenv("EXCLUDE_FUNCS"); v != "" {
 		c.ExcludeFuncs = splitCSV(v)
 	}
+	if v := os.Getenv("EXCLUDE_FUNC_SUFFIXES"); v != "" {
+		c.ExcludeFuncSuffixes = splitCSV(v)
+	}
 	if v := os.Getenv("TEST_TIMEOUT"); v != "" {
 		c.TestTimeout = v
 	}
@@ -274,6 +316,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 	skipResultPackages := fs.String("skip-result-packages", joinCSV(c.SkipResultPackages), "comma-separated displayed package substrings to omit from summaries")
 	excludeFiles := fs.String("exclude-files", joinCSV(c.ExcludeFiles), "comma-separated file substrings to exclude")
 	excludeFuncs := fs.String("exclude-funcs", joinCSV(c.ExcludeFuncs), "comma-separated function name substrings to exclude")
+	excludeFuncSuffixes := fs.String("exclude-func-suffixes", joinCSV(c.ExcludeFuncSuffixes), "comma-separated function name suffixes to exclude")
 	testTimeout := fs.String("timeout", c.TestTimeout, "go test timeout")
 	buildTags := fs.String("tags", c.BuildTags, "build tags passed to go test")
 	thresholdFunc := fs.Float64("threshold-func", c.ThresholdFunc, "function critical threshold")
@@ -292,16 +335,22 @@ func ConfigFromEnv(args []string) (Config, error) {
 	}
 	projectFlagSet := false
 	htmlFlagSet := false
+	modulePrefixFlagSet := false
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "project":
 			projectFlagSet = true
 		case "html-out":
 			htmlFlagSet = true
+		case "module-prefix":
+			modulePrefixFlagSet = true
 		}
 	})
 
 	c.ModulePrefix = normalizeModulePrefix(*modulePrefix)
+	if modulePrefixFlagSet {
+		c.ModulePrefixes = []string{c.ModulePrefix} // explicit prefix overrides auto-detection
+	}
 	c.ProjectName = *projectName
 	c.CoverProfile = *coverProfile
 	c.HTMLPath = *htmlPath
@@ -312,6 +361,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 	c.SkipResultPackages = splitCSV(*skipResultPackages)
 	c.ExcludeFiles = splitCSV(*excludeFiles)
 	c.ExcludeFuncs = splitCSV(*excludeFuncs)
+	c.ExcludeFuncSuffixes = splitCSV(*excludeFuncSuffixes)
 	c.TestTimeout = *testTimeout
 	c.BuildTags = *buildTags
 	c.ThresholdFunc = *thresholdFunc
@@ -326,6 +376,24 @@ func ConfigFromEnv(args []string) (Config, error) {
 	c.ShowTestCounts = *showTestCounts
 
 	return normalizeConfig(c), nil
+}
+
+// resolveCoverProfile decides which coverage profile path to use. An empty
+// configured path means "pick a unique temp file under the OS temp dir", which
+// keeps the profile off the source tree and avoids two concurrent runs clobbering
+// the same file. The returned cleanup removes that temp file; for an explicitly
+// configured path the cleanup is a no-op so the caller's file is left in place.
+func resolveCoverProfile(configured string) (string, func(), error) {
+	if configured != "" {
+		return configured, func() {}, nil
+	}
+	f, err := os.CreateTemp("", "go-cov-*.out")
+	if err != nil {
+		return "", func() {}, err
+	}
+	name := f.Name()
+	_ = f.Close()
+	return name, func() { _ = os.Remove(name) }, nil
 }
 
 func buildTestArgs(pkgs []string) []string {
@@ -442,7 +510,7 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 			continue
 		}
 
-		pkg := strings.TrimPrefix(event.Package, cfg.ModulePrefix)
+		pkg := cfg.stripModulePrefix(event.Package)
 
 		// Build key for output buffering
 		outputKey := pkg
@@ -538,7 +606,7 @@ func buildFailurePackage(importPath string) string {
 	if idx := strings.Index(pkg, " ["); idx != -1 {
 		pkg = pkg[:idx]
 	}
-	return strings.TrimPrefix(strings.TrimSpace(pkg), cfg.ModulePrefix)
+	return cfg.stripModulePrefix(strings.TrimSpace(pkg))
 }
 
 // printBuildFailure reports a package that failed to compile. In CI mode each
@@ -627,7 +695,7 @@ func parsePackageResult(line string, results map[string]*PackageResult) {
 	}
 
 	status := fields[0]
-	pkg := strings.TrimPrefix(fields[1], cfg.ModulePrefix)
+	pkg := cfg.stripModulePrefix(fields[1])
 	for _, ex := range cfg.SkipResultPackages {
 		if ex != "" && strings.Contains(pkg, ex) {
 			return
@@ -745,7 +813,7 @@ func parseFunctionCoverageOutput(output string, c Config) []FuncCoverage {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := scanner.Text()
-		line = strings.TrimPrefix(line, c.ModulePrefix)
+		line = c.stripModulePrefix(line)
 
 		fields := strings.Fields(line)
 		if len(fields) < 3 {
@@ -764,11 +832,15 @@ func parseFunctionCoverageOutput(output string, c Config) []FuncCoverage {
 				break
 			}
 		}
-		// Also skip functions ending in "ForTest" — test helpers in non-test files
-		if strings.HasSuffix(fields[1], "ForTest") {
-			excluded = true
+		// Skip functions whose name ends in a configured suffix (e.g. "ForTest"
+		// helpers that live in non-test files). See Config.ExcludeFuncSuffixes.
+		for _, suffix := range c.ExcludeFuncSuffixes {
+			if suffix != "" && strings.HasSuffix(fields[1], suffix) {
+				excluded = true
+				break
+			}
 		}
-		// Skip excluded functions (nocov: pebble batch error paths)
+		// Skip excluded functions by name substring.
 		for _, ef := range c.ExcludeFuncs {
 			if ef != "" && strings.Contains(fields[1], ef) {
 				excluded = true

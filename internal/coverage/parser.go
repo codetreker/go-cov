@@ -31,7 +31,7 @@ func parseLine(line string, c Config) (Block, bool) {
 	}
 	filePath := locParts[0]
 
-	filePath = strings.TrimPrefix(filePath, c.ModulePrefix)
+	filePath = c.stripModulePrefix(filePath)
 
 	// Skip excluded files
 	if isFileExcluded(filePath, c.ExcludeFiles) {
