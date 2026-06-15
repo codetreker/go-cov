@@ -34,9 +34,10 @@ type fileTest struct {
 }
 
 type fileExclude struct {
-	Packages []string `toml:"packages"`
-	Files    []string `toml:"files"`
-	Funcs    []string `toml:"funcs"`
+	Packages     []string `toml:"packages"`
+	Files        []string `toml:"files"`
+	Funcs        []string `toml:"funcs"`
+	FuncSuffixes []string `toml:"func_suffixes"`
 }
 
 type fileHTML struct {
@@ -50,11 +51,9 @@ type fileCriticalBlocks struct {
 
 func normalizeConfig(c Config) Config {
 	c.ModulePrefix = normalizeModulePrefix(c.ModulePrefix)
+	c.ModulePrefixes = normalizeModulePrefixes(c.ModulePrefixes)
 	if c.ProjectName == "" {
 		c.ProjectName = projectNameFromModule(strings.TrimSuffix(c.ModulePrefix, "/"))
-	}
-	if c.CoverProfile == "" {
-		c.CoverProfile = "/tmp/coverage.out"
 	}
 	if c.HTMLPath == "" {
 		c.HTMLPath = defaultHTMLPath(c.ProjectName)
@@ -89,13 +88,45 @@ func projectNameFromModule(modulePath string) string {
 	return path.Base(modulePath)
 }
 
-func detectModulePath() string {
+// detectModulePaths returns the import path of every main module. In a Go
+// workspace `go list -m` prints one module per line, so callers must be ready
+// for more than one. Returns nil when detection fails (e.g. GOPATH mode).
+func detectModulePaths() []string {
 	cmd := exec.Command("go", "list", "-m")
 	output, err := cmd.Output()
 	if err != nil {
-		return ""
+		return nil
 	}
-	return strings.TrimSpace(string(output))
+	return parseModuleList(string(output))
+}
+
+// parseModuleList extracts module import paths from `go list -m` output, one per
+// line. Blank lines and Go's "go: ..." toolchain notices are ignored.
+func parseModuleList(output string) []string {
+	var mods []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "go:") {
+			continue
+		}
+		mods = append(mods, line)
+	}
+	return mods
+}
+
+// normalizeModulePrefixes normalizes each module path into a strippable prefix
+// (trailing slash) and drops empties.
+func normalizeModulePrefixes(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if np := normalizeModulePrefix(p); np != "" {
+			out = append(out, np)
+		}
+	}
+	return out
 }
 
 func splitCSV(value string) []string {
@@ -159,6 +190,7 @@ func mergeFileConfig(c *Config, fc fileConfig) {
 	}
 	if fc.ModulePrefix != nil {
 		c.ModulePrefix = normalizeModulePrefix(*fc.ModulePrefix)
+		c.ModulePrefixes = []string{c.ModulePrefix} // explicit prefix overrides auto-detection
 	}
 	if fc.Thresholds.Total != nil {
 		c.ThresholdTotal = *fc.Thresholds.Total
@@ -189,6 +221,9 @@ func mergeFileConfig(c *Config, fc fileConfig) {
 	}
 	if fc.Exclude.Funcs != nil {
 		c.ExcludeFuncs = fc.Exclude.Funcs
+	}
+	if fc.Exclude.FuncSuffixes != nil {
+		c.ExcludeFuncSuffixes = fc.Exclude.FuncSuffixes
 	}
 	if fc.HTML.Enabled != nil {
 		c.GenerateHTML = *fc.HTML.Enabled

@@ -209,6 +209,22 @@ func TestConfigFromEnvMissingExplicitConfigFileFails(t *testing.T) {
 	}
 }
 
+func TestConfigFromEnvDefaultsAndOverridesFuncSuffixes(t *testing.T) {
+	t.Setenv("CI", "")
+
+	cfg, err := ConfigFromEnv(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStringSlice(t, cfg.ExcludeFuncSuffixes, []string{"ForTest"})
+
+	cfg, err = ConfigFromEnv([]string{"--exclude-func-suffixes", "Mock,Fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertStringSlice(t, cfg.ExcludeFuncSuffixes, []string{"Mock", "Fake"})
+}
+
 func writeConfigFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
