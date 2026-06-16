@@ -44,6 +44,7 @@ type Config struct {
 	FailOnCriticalBlocks bool     // In CI mode, fail on AST critical uncovered blocks
 	UncoveredLimit       int      // Max uncovered blocks to show
 	ShowTestCounts       bool     // Show TESTS column in package summary
+	ColorEnabled         bool     // Emit ANSI color escapes (false when NO_COLOR is set or stdout is not a TTY)
 }
 
 // stripModulePrefix removes the longest matching main-module import-path prefix
@@ -68,9 +69,34 @@ func (c Config) stripModulePrefix(s string) string {
 const (
 	ColorRed    = "\033[31m"
 	ColorYellow = "\033[33m"
+	ColorGreen  = "\033[32m"
 	ColorBlue   = "\033[34m"
 	ColorReset  = "\033[0m"
 )
+
+// detectColorEnabled reports whether ANSI color escapes should be emitted.
+// Color is disabled when the NO_COLOR environment variable is present and
+// non-empty (per the https://no-color.org convention) or when stdout is not a
+// character device (e.g. redirected to a file or piped), so plain text is
+// written to non-terminals. TTY detection uses only the standard library.
+func detectColorEnabled() bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	fi, err := os.Stdout.Stat()
+	isTTY := err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return isTTY
+}
+
+// colorize wraps s in the given ANSI color code when color is enabled,
+// returning s unchanged otherwise. Centralizing this keeps raw escape literals
+// out of the rest of the package.
+func colorize(s, color string, enabled bool) string {
+	if !enabled {
+		return s
+	}
+	return color + s + ColorReset
+}
 
 // TestEvent represents a single JSON event from go test -json
 type TestEvent struct {
@@ -794,7 +820,7 @@ func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts 
 					fmt.Printf("::error::%-3s %-40s %-10s %s (CRITICAL: < %.0f%%)\n",
 						r.Status, r.Name, duration, coverageStr, cfg.ThresholdPackage)
 				} else {
-					coverageStr = fmt.Sprintf("%s%s%s (CRITICAL: < %.0f%%)", ColorRed, r.CoverageStr, ColorReset, cfg.ThresholdPackage)
+					coverageStr = fmt.Sprintf("%s (CRITICAL: < %.0f%%)", colorize(r.CoverageStr, ColorRed, cfg.ColorEnabled), cfg.ThresholdPackage)
 					if cfg.ShowTestCounts {
 						fmt.Printf("%-3s %-40s %-10s %-7d %s\n", r.Status, r.Name, duration, total, coverageStr)
 					} else {
@@ -817,7 +843,8 @@ func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts 
 			if cfg.CIMode {
 				fmt.Printf("::error::%-3s %-40s %s\n", r.Status, r.Name, "[FAILED]")
 			} else {
-				fmt.Printf("%s%-3s %-40s %s%s\n", ColorRed, r.Status, r.Name, "[FAILED]", ColorReset)
+				row := fmt.Sprintf("%-3s %-40s %s", r.Status, r.Name, "[FAILED]")
+				fmt.Println(colorize(row, ColorRed, cfg.ColorEnabled))
 			}
 			hasCritical = true
 		}
@@ -962,7 +989,7 @@ func printFunctionCoverage(funcs []FuncCoverage) (bool, int) {
 				fmt.Printf("::error file=%s,line=%s::%-*s %-*s %s (CRITICAL < %.0f%%)\n",
 					file, line, maxLocWidth, f.Location, maxFuncWidth, f.Function, covStr, cfg.ThresholdFunc)
 			} else {
-				covStr = fmt.Sprintf("%s%.1f%%%s (CRITICAL: < %.0f%%)", ColorRed, f.Coverage, ColorReset, cfg.ThresholdFunc)
+				covStr = fmt.Sprintf("%s (CRITICAL: < %.0f%%)", colorize(fmt.Sprintf("%.1f%%", f.Coverage), ColorRed, cfg.ColorEnabled), cfg.ThresholdFunc)
 				fmt.Printf("%-*s %-*s %s\n", maxLocWidth, f.Location, maxFuncWidth, f.Function, covStr)
 			}
 		} else {
@@ -1000,7 +1027,7 @@ func printTotal(totalCov float64, known bool, width int) bool {
 		if cfg.CIMode {
 			fmt.Printf("::error::%-*s %s (CRITICAL: < %.0f%%)\n", labelWidth, "TOTAL", totalStr, cfg.ThresholdTotal)
 		} else {
-			totalStr = fmt.Sprintf("%s%.1f%%%s (CRITICAL: < %.0f%%)", ColorRed, totalCov, ColorReset, cfg.ThresholdTotal)
+			totalStr = fmt.Sprintf("%s (CRITICAL: < %.0f%%)", colorize(fmt.Sprintf("%.1f%%", totalCov), ColorRed, cfg.ColorEnabled), cfg.ThresholdTotal)
 			fmt.Printf("%-*s %s\n", labelWidth, "TOTAL", totalStr)
 		}
 	} else {
@@ -1162,7 +1189,7 @@ func analyzeUncoveredBlocks() bool {
 	// Print output
 	maxLocWidth := calculateMaxLocWidth(merged)
 	printUncoveredHeader(maxLocWidth, false)
-	printBlocks(merged, maxLocWidth, cfg.UncoveredLimit)
+	printBlocks(merged, maxLocWidth, cfg.UncoveredLimit, cfg.ColorEnabled)
 
 	return hasCritical
 }

@@ -41,7 +41,7 @@ Details:`)
 }
 
 // printBlocks prints the analyzed blocks with formatting
-func printBlocks(merged []MergedBlock, maxLocWidth int, limit int) {
+func printBlocks(merged []MergedBlock, maxLocWidth int, limit int, colorEnabled bool) {
 	count := 0
 	printedNonCritical := false
 
@@ -59,7 +59,7 @@ func printBlocks(merged []MergedBlock, maxLocWidth int, limit int) {
 		shouldPrint := isCritical || count < limit || !printedNonCritical
 
 		if shouldPrint {
-			b.Print(maxLocWidth)
+			b.Print(maxLocWidth, colorEnabled)
 			count++
 			if !isCritical {
 				printedNonCritical = true

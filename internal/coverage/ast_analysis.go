@@ -153,7 +153,7 @@ func AnalyzeBlockWithAST(b *MergedBlock, astCache *ASTCache, fileCache *FileCach
 	switch {
 	case score >= 30 || (analysis.HasExportedFunc && effectiveCount >= CRITICAL_EFFECTIVE_LINES):
 		b.Level = "CRITICAL"
-		b.FixAction = "\033[31mRequired\033[0m"
+		b.FixAction = "Required"
 	case score >= 25 || analysis.HasConcurrency:
 		b.Level = "HIGH"
 		b.FixAction = "Suggested"
@@ -528,7 +528,7 @@ func classifyByEffectiveLines(effectiveLines int) string {
 func getFixAction(level string) string {
 	switch level {
 	case "CRITICAL":
-		return "\033[31mRequired\033[0m"
+		return "Required"
 	case "HIGH":
 		return "Suggested"
 	case "MEDIUM":
