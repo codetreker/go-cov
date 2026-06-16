@@ -53,7 +53,11 @@ func TestParseTotalCoverageOutput(t *testing.T) {
 github.com/codetrek/haystack/internal/live.go:13: Replay 0.0%
 total:							(statements)	88.8%
 `
-	if got := parseTotalCoverageOutput(input); got != 88.8 {
+	got, known := parseTotalCoverageOutput(input)
+	if !known {
+		t.Fatalf("parseTotalCoverageOutput() known = false, want true when total line present")
+	}
+	if got != 88.8 {
 		t.Fatalf("parseTotalCoverageOutput() = %v, want 88.8", got)
 	}
 }
@@ -61,9 +65,32 @@ total:							(statements)	88.8%
 func TestParseTotalCoverageOutputMissingTotal(t *testing.T) {
 	t.Parallel()
 
+	// No "total:" line: this is "no data", not a genuine 0% coverage. The helper
+	// must report the total as unknown so the caller does not treat it as 0/CRITICAL.
 	input := `github.com/codetrek/haystack/internal/live.go:10: Run 81.2%
 `
-	if got := parseTotalCoverageOutput(input); got != 0 {
+	got, known := parseTotalCoverageOutput(input)
+	if known {
+		t.Fatalf("parseTotalCoverageOutput() known = true, want false when no total line")
+	}
+	if got != 0 {
 		t.Fatalf("parseTotalCoverageOutput() = %v, want 0 when no total line", got)
+	}
+}
+
+func TestParseTotalCoverageOutputGenuineZero(t *testing.T) {
+	t.Parallel()
+
+	// A real total of 0.0% must be reported as known: it is genuine "0% covered"
+	// data, distinct from an absent/unreadable total.
+	input := `github.com/codetrek/haystack/internal/live.go:10: Run 0.0%
+total:							(statements)	0.0%
+`
+	got, known := parseTotalCoverageOutput(input)
+	if !known {
+		t.Fatalf("parseTotalCoverageOutput() known = false, want true for a genuine 0.0%% total")
+	}
+	if got != 0 {
+		t.Fatalf("parseTotalCoverageOutput() = %v, want 0", got)
 	}
 }

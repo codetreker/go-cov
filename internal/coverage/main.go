@@ -151,13 +151,13 @@ func Run(c Config) int {
 		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
 	}
 	funcData := parseFunctionCoverageOutput(funcOutput, cfg)
-	totalCov := parseTotalCoverageOutput(funcOutput)
+	totalCov, totalKnown := parseTotalCoverageOutput(funcOutput)
 
 	// Print function coverage details
 	hasCriticalFunc, funcWidth := printFunctionCoverage(funcData)
 
 	// Print total and check threshold
-	hasCriticalTotal := printTotal(totalCov, funcWidth)
+	hasCriticalTotal := printTotal(totalCov, totalKnown, funcWidth)
 
 	// Print statistics
 	printStatistics(funcData, topLevelCounts, subTestCounts)
@@ -947,16 +947,27 @@ func printFunctionCoverage(funcs []FuncCoverage) (bool, int) {
 	return hasCritical, totalWidth
 }
 
-// printTotal prints total coverage and checks threshold
-// Returns true if total is below threshold (CRITICAL)
-func printTotal(totalCov float64, width int) bool {
-	isCritical := totalCov < cfg.ThresholdTotal
-
-	totalStr := fmt.Sprintf("%.1f%%", totalCov)
+// printTotal prints total coverage and checks threshold.
+// known reports whether totalCov was actually determined from coverage data;
+// when false the total is unknown ("no data"), printed as "n/a", and never
+// treated as CRITICAL. Returns true only when a known total is below threshold.
+func printTotal(totalCov float64, known bool, width int) bool {
 	labelWidth := width - 10 // Leave space for coverage value
 	if labelWidth < 10 {
 		labelWidth = 10
 	}
+
+	// An undeterminable total is "no data", not 0% coverage: report it as
+	// unknown and never let it trip the threshold or fail CI.
+	if !known {
+		fmt.Printf("%-*s %s\n", labelWidth, "TOTAL", "n/a")
+		fmt.Println(strings.Repeat("-", width))
+		return false
+	}
+
+	isCritical := totalCov < cfg.ThresholdTotal
+
+	totalStr := fmt.Sprintf("%.1f%%", totalCov)
 
 	if isCritical {
 		if cfg.CIMode {
@@ -974,21 +985,25 @@ func printTotal(totalCov float64, width int) bool {
 }
 
 // parseTotalCoverageOutput extracts the overall coverage percentage from the
-// "total:" line of `go tool cover -func` output. It returns 0 when no total line
-// is present.
-func parseTotalCoverageOutput(output string) float64 {
+// "total:" line of `go tool cover -func` output. The boolean return reports
+// whether a total was found: it is false when the output is empty or has no
+// parseable "total:" line, which means "no data" rather than a genuine 0.0%.
+func parseTotalCoverageOutput(output string) (float64, bool) {
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "total:") {
 			fields := strings.Fields(line)
 			if len(fields) >= 3 {
 				covStr := strings.TrimSuffix(fields[len(fields)-1], "%")
-				cov, _ := strconv.ParseFloat(covStr, 64)
-				return cov
+				cov, err := strconv.ParseFloat(covStr, 64)
+				if err != nil {
+					return 0, false
+				}
+				return cov, true
 			}
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // printStatistics prints coverage statistics
