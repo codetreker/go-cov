@@ -43,11 +43,13 @@ func Run(out io.Writer, c Config) int {
 	defer cancel()
 
 	// The deferred cleanup above does not run when the process is terminated by a
-	// signal. Install a handler that cancels the in-flight `go test`, removes the
-	// temp profile, and exits, so SIGINT/SIGTERM neither leaks the profile nor
-	// orphans the test subprocess. The handler is scoped to this call: signal.Stop
-	// and closing done stop the registration and let the goroutine return on Run's
-	// normal exit, so repeated in-process callers do not leak.
+	// signal. Install a handler that removes the temp profile before exiting so
+	// SIGINT/SIGTERM does not leak it, and requests cancellation of the in-flight
+	// `go` subprocess via ctx. The cancellation is best-effort: go-cov may exit
+	// before the child is reaped, though on an interactive Ctrl-C the child also
+	// receives the terminal's group signal directly. The handler is scoped to this
+	// call: signal.Stop and closing done stop the registration and let the goroutine
+	// return on Run's normal exit, so repeated in-process callers do not leak.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -83,7 +85,7 @@ func Run(out io.Writer, c Config) int {
 
 	// Get function coverage data from a single `go tool cover -func` invocation,
 	// deriving both the per-function list and the total from the same output.
-	funcOutput, err := runFuncCoverage(cfg)
+	funcOutput, err := runFuncCoverage(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
 	}
@@ -101,7 +103,7 @@ func Run(out io.Writer, c Config) int {
 
 	// Generate HTML report (only in local mode)
 	if !cfg.CIMode && cfg.GenerateHTML {
-		generateHTMLReport(cfg)
+		generateHTMLReport(ctx, cfg)
 	}
 
 	// Analyze uncovered blocks
@@ -168,7 +170,7 @@ func onSignalCleanup(sigCh <-chan os.Signal, done <-chan struct{}, onSignal func
 // runTests executes go test and parses JSON output
 func runTests(ctx context.Context, out io.Writer, cfg Config) ([]PackageResult, map[string]int, map[string]int, int) {
 	// Build package list
-	pkgCmd := exec.Command("go", "list", "./...")
+	pkgCmd := exec.CommandContext(ctx, "go", "list", "./...")
 	pkgOutput, err := pkgCmd.Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error listing packages: %v\n", err)
@@ -228,8 +230,8 @@ func runTests(ctx context.Context, out io.Writer, cfg Config) ([]PackageResult, 
 // runFuncCoverage runs `go tool cover -func` once and returns its raw output.
 // Both the per-function list and the "total:" line are derived from this single
 // invocation, avoiding a redundant subprocess and re-parse of the same profile.
-func runFuncCoverage(cfg Config) (string, error) {
-	cmd := exec.Command("go", "tool", "cover", "-func="+cfg.CoverProfile)
+func runFuncCoverage(ctx context.Context, cfg Config) (string, error) {
+	cmd := exec.CommandContext(ctx, "go", "tool", "cover", "-func="+cfg.CoverProfile)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -238,14 +240,14 @@ func runFuncCoverage(cfg Config) (string, error) {
 }
 
 // generateHTMLReport generates an HTML coverage report
-func generateHTMLReport(cfg Config) {
+func generateHTMLReport(ctx context.Context, cfg Config) {
 	if dir := filepath.Dir(cfg.HTMLPath); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating HTML report directory: %v\n", err)
 			return
 		}
 	}
-	cmd := exec.Command("go", "tool", "cover", "-html="+cfg.CoverProfile, "-o", cfg.HTMLPath)
+	cmd := exec.CommandContext(ctx, "go", "tool", "cover", "-html="+cfg.CoverProfile, "-o", cfg.HTMLPath)
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating HTML report: %v\n", err)
 	}

@@ -40,7 +40,7 @@ type Config struct {
 	FailOnCriticalBlocks bool     // In CI mode, fail on AST critical uncovered blocks
 	UncoveredLimit       int      // Max uncovered blocks to show
 	ShowTestCounts       bool     // Show TESTS column in package summary
-	ColorEnabled         bool     // Emit ANSI color escapes (false when NO_COLOR is set or stdout is not a TTY)
+	ColorEnabled         bool     // Emit ANSI color escapes (false when NO_COLOR is set or the output writer is not a terminal)
 }
 
 // stripModulePrefix removes the longest matching main-module import-path prefix
