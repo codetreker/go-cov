@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/token"
 	"strings"
+	"unicode"
 )
 
 const CRITICAL_EFFECTIVE_LINES = 3
@@ -253,44 +254,96 @@ func isExportedReceiver(expr ast.Expr) bool {
 	return false
 }
 
+// splitIdentWords splits a Go identifier into lowercased words on camelCase,
+// acronym, underscore, and digit boundaries (e.g. "parseErrCh" -> ["parse",
+// "err", "ch"], "HTTPErr" -> ["http", "err"]). Used for word-accurate matching
+// so substrings like "errand"/"terror" are not mistaken for the word "err".
+func splitIdentWords(name string) []string {
+	var words []string
+	var cur []rune
+	rs := []rune(name)
+	push := func() {
+		if len(cur) > 0 {
+			words = append(words, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	for i, r := range rs {
+		if r == '_' {
+			push()
+			continue
+		}
+		if i > 0 {
+			prev := rs[i-1]
+			lowerToUpper := unicode.IsUpper(r) && (unicode.IsLower(prev) || unicode.IsDigit(prev))
+			acronymEnd := unicode.IsUpper(prev) && unicode.IsUpper(r) && i+1 < len(rs) && unicode.IsLower(rs[i+1])
+			if lowerToUpper || acronymEnd {
+				push()
+			}
+		}
+		cur = append(cur, r)
+	}
+	push()
+	return words
+}
+
+// isErrorName reports whether an identifier is an error-typed name by Go
+// convention — i.e. one of its camelCase/underscore words is err/errs/error/
+// errors. This matches err, myErr, parseError, errCh while rejecting errand,
+// terror, iterator.
+func isErrorName(name string) bool {
+	for _, w := range splitIdentWords(name) {
+		switch w {
+		case "err", "errs", "error", "errors":
+			return true
+		}
+	}
+	return false
+}
+
+// isErrorConstructorCall reports whether a call expression constructs/wraps an
+// error (fmt.Errorf, errors.New/Wrap/Wrapf, xerrors.Errorf, ...). New/Wrap/Wrapf
+// are only treated as error constructors when the package qualifier is itself an
+// errors-ish identifier, so an unrelated pkg.New() is not misread as an error.
+func isErrorConstructorCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	switch sel.Sel.Name {
+	case "Errorf":
+		return true
+	case "New", "Wrap", "Wrapf":
+		if pkg, ok := sel.X.(*ast.Ident); ok {
+			return isErrorName(pkg.Name)
+		}
+	}
+	return false
+}
+
 // isErrorCheck checks if the condition is an error check (err != nil or err == nil)
 func isErrorCheck(expr ast.Expr) bool {
 	binExpr, ok := expr.(*ast.BinaryExpr)
 	if !ok {
 		return false
 	}
-
-	// Check left side for 'err' identifier
-	if ident, ok := binExpr.X.(*ast.Ident); ok {
-		if strings.Contains(strings.ToLower(ident.Name), "err") {
-			return true
-		}
+	if ident, ok := binExpr.X.(*ast.Ident); ok && isErrorName(ident.Name) {
+		return true
 	}
-
-	// Check right side for 'err' identifier
-	if ident, ok := binExpr.Y.(*ast.Ident); ok {
-		if strings.Contains(strings.ToLower(ident.Name), "err") {
-			return true
-		}
+	if ident, ok := binExpr.Y.(*ast.Ident); ok && isErrorName(ident.Name) {
+		return true
 	}
-
 	return false
 }
 
-// isErrorExpr checks if an expression is likely an error (named 'err' or type error)
+// isErrorExpr checks if an expression is likely an error (named like an error or
+// constructed by an error constructor such as fmt.Errorf / errors.New).
 func isErrorExpr(expr ast.Expr) bool {
 	if ident, ok := expr.(*ast.Ident); ok {
-		name := strings.ToLower(ident.Name)
-		return strings.Contains(name, "err")
+		return isErrorName(ident.Name)
 	}
-	// Check for fmt.Errorf, errors.New, etc.
 	if call, ok := expr.(*ast.CallExpr); ok {
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
-			funcName := sel.Sel.Name
-			if funcName == "Errorf" || funcName == "New" || funcName == "Wrap" || funcName == "Wrapf" {
-				return true
-			}
-		}
+		return isErrorConstructorCall(call)
 	}
 	return false
 }
