@@ -131,12 +131,9 @@ type FuncCoverage struct {
 	Coverage float64
 }
 
-// Global config, retained internally to keep the extracted implementation small.
-var cfg Config
-
 // Run executes the coverage workflow and returns a process-style exit code.
 func Run(c Config) int {
-	cfg = normalizeConfig(c)
+	cfg := normalizeConfig(c)
 
 	profile, cleanup, err := resolveCoverProfile(cfg.CoverProfile)
 	if err != nil {
@@ -168,7 +165,7 @@ func Run(c Config) int {
 	fmt.Printf("[%s] Starting test run...\n\n", startTime.Format("15:04:05"))
 
 	// Run tests and collect results
-	results, topLevelCounts, subTestCounts, exitCode := runTests()
+	results, topLevelCounts, subTestCounts, exitCode := runTests(cfg)
 	if exitCode != 0 && len(results) == 0 {
 		return exitCode
 	}
@@ -179,7 +176,7 @@ func Run(c Config) int {
 	fmt.Println()
 
 	// Print package coverage summary
-	hasCriticalPackage := printPackageSummary(results, topLevelCounts, subTestCounts)
+	hasCriticalPackage := printPackageSummary(cfg, results, topLevelCounts, subTestCounts)
 
 	if exitCode != 0 {
 		return exitCode
@@ -187,7 +184,7 @@ func Run(c Config) int {
 
 	// Get function coverage data from a single `go tool cover -func` invocation,
 	// deriving both the per-function list and the total from the same output.
-	funcOutput, err := runFuncCoverage()
+	funcOutput, err := runFuncCoverage(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
 	}
@@ -195,23 +192,23 @@ func Run(c Config) int {
 	totalCov, totalKnown := parseTotalCoverageOutput(funcOutput)
 
 	// Print function coverage details
-	hasCriticalFunc, funcWidth := printFunctionCoverage(funcData)
+	hasCriticalFunc, funcWidth := printFunctionCoverage(cfg, funcData)
 
 	// Print total and check threshold
-	hasCriticalTotal := printTotal(totalCov, totalKnown, funcWidth)
+	hasCriticalTotal := printTotal(cfg, totalCov, totalKnown, funcWidth)
 
 	// Print statistics
-	printStatistics(funcData, topLevelCounts, subTestCounts)
+	printStatistics(cfg, funcData, topLevelCounts, subTestCounts)
 
 	// Generate HTML report (only in local mode)
 	if !cfg.CIMode && cfg.GenerateHTML {
-		generateHTMLReport()
+		generateHTMLReport(cfg)
 	}
 
 	// Analyze uncovered blocks
 	fmt.Println()
 	fmt.Println(strings.Repeat("-", 90))
-	hasCriticalBlocks := analyzeUncoveredBlocks()
+	hasCriticalBlocks := analyzeUncoveredBlocks(cfg)
 
 	// In CI mode, exit with error if any CRITICAL issues
 	if cfg.CIMode && (hasCriticalPackage || hasCriticalFunc || hasCriticalTotal || (cfg.FailOnCriticalBlocks && hasCriticalBlocks)) {
@@ -443,7 +440,7 @@ func resolveCoverProfile(configured string) (string, func(), error) {
 	return name, func() { _ = os.Remove(name) }, nil
 }
 
-func buildTestArgs(pkgs []string) []string {
+func buildTestArgs(cfg Config, pkgs []string) []string {
 	args := []string{"test"}
 	args = append(args, pkgs...)
 	args = append(args, "-json", "-covermode=atomic", "-coverprofile="+cfg.CoverProfile)
@@ -460,7 +457,7 @@ func buildTestArgs(pkgs []string) []string {
 }
 
 // runTests executes go test and parses JSON output
-func runTests() ([]PackageResult, map[string]int, map[string]int, int) {
+func runTests(cfg Config) ([]PackageResult, map[string]int, map[string]int, int) {
 	// Build package list
 	pkgCmd := exec.Command("go", "list", "./...")
 	pkgOutput, err := pkgCmd.Output()
@@ -490,7 +487,7 @@ func runTests() ([]PackageResult, map[string]int, map[string]int, int) {
 		return nil, nil, nil, 1
 	}
 
-	args := buildTestArgs(pkgs)
+	args := buildTestArgs(cfg, pkgs)
 
 	cmd := exec.Command("go", args...)
 	stdout, err := cmd.StdoutPipe()
@@ -505,7 +502,7 @@ func runTests() ([]PackageResult, map[string]int, map[string]int, int) {
 		return nil, nil, nil, 1
 	}
 
-	results, topLevelCounts, subTestCounts := parseTestOutput(stdout)
+	results, topLevelCounts, subTestCounts := parseTestOutput(cfg, stdout)
 
 	exitCode := 0
 	if err := cmd.Wait(); err != nil {
@@ -520,7 +517,7 @@ func runTests() ([]PackageResult, map[string]int, map[string]int, int) {
 }
 
 // parseTestOutput parses JSON output from go test
-func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]int) {
+func parseTestOutput(cfg Config, r io.Reader) ([]PackageResult, map[string]int, map[string]int) {
 	results := make(map[string]*PackageResult)
 	topLevelCounts := make(map[string]int)
 	subTestCounts := make(map[string]int)
@@ -550,7 +547,7 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 		if trimmed := strings.TrimSpace(line); trimmed != "" && strings.HasPrefix(trimmed, "{") {
 			var event TestEvent
 			if err := json.Unmarshal([]byte(trimmed), &event); err == nil {
-				processTestEvent(event, results, topLevelCounts, subTestCounts,
+				processTestEvent(cfg, event, results, topLevelCounts, subTestCounts,
 					printedPackages, packageStartTimes, testOutputs, buildOutputs)
 			}
 		}
@@ -576,6 +573,7 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 // parse state: buffering build/test output, printing package start/finish and
 // failure detail, and counting top-level vs subtests.
 func processTestEvent(
+	cfg Config,
 	event TestEvent,
 	results map[string]*PackageResult,
 	topLevelCounts, subTestCounts map[string]int,
@@ -588,7 +586,7 @@ func processTestEvent(
 	// ImportPath, with an empty Package. Buffer them under the package name so
 	// they can be printed when the package's fail event arrives.
 	if event.Action == "build-output" {
-		bpkg := buildFailurePackage(event.ImportPath)
+		bpkg := buildFailurePackage(cfg, event.ImportPath)
 		buildOutputs[bpkg] = append(buildOutputs[bpkg], event.Output)
 		return
 	}
@@ -630,11 +628,11 @@ func processTestEvent(
 	if event.Action == "output" {
 		// Parse coverage/result lines
 		if strings.HasPrefix(event.Output, "ok") {
-			parsePackageResult(event.Output, results)
+			parsePackageResult(cfg, event.Output, results)
 		} else if strings.HasPrefix(event.Output, "FAIL") {
-			parsePackageResult(event.Output, results)
+			parsePackageResult(cfg, event.Output, results)
 		} else if strings.HasPrefix(event.Output, "?") {
-			parsePackageResult(event.Output, results)
+			parsePackageResult(cfg, event.Output, results)
 		} else {
 			// Buffer output for potential failure
 			testOutputs[outputKey] = append(testOutputs[outputKey], event.Output)
@@ -658,10 +656,10 @@ func processTestEvent(
 	// attributed to an individual test.
 	if event.Action == "fail" && event.Test == "" {
 		if bo, ok := buildOutputs[pkg]; ok {
-			printBuildFailure(pkg, bo)
+			printBuildFailure(cfg, pkg, bo)
 			delete(buildOutputs, pkg)
 		} else if outputs, ok := testOutputs[pkg]; ok && len(outputs) > 0 {
-			printPackageFailure(pkg, outputs)
+			printPackageFailure(cfg, pkg, outputs)
 		}
 		delete(testOutputs, pkg)
 	}
@@ -675,7 +673,7 @@ func processTestEvent(
 // buildFailurePackage extracts the display package name from a build event's
 // ImportPath, e.g. "example.com/mod/pkg [example.com/mod/pkg.test]" -> "pkg"
 // after the module prefix is stripped.
-func buildFailurePackage(importPath string) string {
+func buildFailurePackage(cfg Config, importPath string) string {
 	pkg := importPath
 	if idx := strings.Index(pkg, " ["); idx != -1 {
 		pkg = pkg[:idx]
@@ -686,7 +684,7 @@ func buildFailurePackage(importPath string) string {
 // printBuildFailure reports a package that failed to compile. In CI mode each
 // compiler error becomes a GitHub Actions annotation pinned to its file/line;
 // locally it prints a human-readable block.
-func printBuildFailure(pkg string, lines []string) {
+func printBuildFailure(cfg Config, pkg string, lines []string) {
 	if cfg.CIMode {
 		for _, out := range lines {
 			if file, lineNo, msg, ok := parseCompilerError(out); ok {
@@ -706,7 +704,7 @@ func printBuildFailure(pkg string, lines []string) {
 // printPackageFailure reports package-scope failure output (a panic or other
 // output not attributed to a single test). In CI mode it is prefixed with a
 // GitHub Actions error annotation.
-func printPackageFailure(pkg string, lines []string) {
+func printPackageFailure(cfg Config, pkg string, lines []string) {
 	if cfg.CIMode {
 		fmt.Printf("::error::package %s failed\n", pkg)
 	} else {
@@ -761,7 +759,7 @@ func isAllDigits(s string) bool {
 }
 
 // parsePackageResult parses a single package result line
-func parsePackageResult(line string, results map[string]*PackageResult) {
+func parsePackageResult(cfg Config, line string, results map[string]*PackageResult) {
 	line = strings.TrimSpace(line)
 	fields := strings.Fields(line)
 	if len(fields) < 2 {
@@ -802,7 +800,7 @@ func parsePackageResult(line string, results map[string]*PackageResult) {
 
 // printPackageSummary prints the package coverage summary table
 // Returns true if any package is below threshold (CRITICAL)
-func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts map[string]int) bool {
+func printPackageSummary(cfg Config, results []PackageResult, topLevelCounts, subTestCounts map[string]int) bool {
 	hasCritical := false
 
 	fmt.Println("Package coverage summary:")
@@ -878,7 +876,7 @@ func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts 
 // runFuncCoverage runs `go tool cover -func` once and returns its raw output.
 // Both the per-function list and the "total:" line are derived from this single
 // invocation, avoiding a redundant subprocess and re-parse of the same profile.
-func runFuncCoverage() (string, error) {
+func runFuncCoverage(cfg Config) (string, error) {
 	cmd := exec.Command("go", "tool", "cover", "-func="+cfg.CoverProfile)
 	output, err := cmd.Output()
 	if err != nil {
@@ -945,7 +943,7 @@ func parseFunctionCoverageOutput(output string, c Config) []FuncCoverage {
 
 // printFunctionCoverage prints function coverage details
 // Returns (hasCritical, totalWidth) where totalWidth is for alignment
-func printFunctionCoverage(funcs []FuncCoverage) (bool, int) {
+func printFunctionCoverage(cfg Config, funcs []FuncCoverage) (bool, int) {
 	hasCritical := false
 
 	// Count functions above threshold and collect below threshold
@@ -1020,7 +1018,7 @@ func printFunctionCoverage(funcs []FuncCoverage) (bool, int) {
 // known reports whether totalCov was actually determined from coverage data;
 // when false the total is unknown ("no data"), printed as "n/a", and never
 // treated as CRITICAL. Returns true only when a known total is below threshold.
-func printTotal(totalCov float64, known bool, width int) bool {
+func printTotal(cfg Config, totalCov float64, known bool, width int) bool {
 	labelWidth := width - 10 // Leave space for coverage value
 	if labelWidth < 10 {
 		labelWidth = 10
@@ -1076,7 +1074,7 @@ func parseTotalCoverageOutput(output string) (float64, bool) {
 }
 
 // printStatistics prints coverage statistics
-func printStatistics(funcs []FuncCoverage, topLevelCounts, subTestCounts map[string]int) {
+func printStatistics(cfg Config, funcs []FuncCoverage, topLevelCounts, subTestCounts map[string]int) {
 	count100 := 0
 	count95_100 := 0
 	count85_95 := 0
@@ -1116,7 +1114,7 @@ func printStatistics(funcs []FuncCoverage, topLevelCounts, subTestCounts map[str
 }
 
 // generateHTMLReport generates an HTML coverage report
-func generateHTMLReport() {
+func generateHTMLReport(cfg Config) {
 	if dir := filepath.Dir(cfg.HTMLPath); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating HTML report directory: %v\n", err)
@@ -1131,7 +1129,7 @@ func generateHTMLReport() {
 
 // analyzeUncoveredBlocks parses coverage file and analyzes uncovered blocks
 // Returns true if any CRITICAL blocks found
-func analyzeUncoveredBlocks() bool {
+func analyzeUncoveredBlocks(cfg Config) bool {
 	file, err := os.Open(cfg.CoverProfile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening coverage file: %v\n", err)
@@ -1204,7 +1202,7 @@ func analyzeUncoveredBlocks() bool {
 	// Print output
 	maxLocWidth := calculateMaxLocWidth(merged)
 	printUncoveredHeader(maxLocWidth, false)
-	printBlocks(merged, maxLocWidth, cfg.UncoveredLimit, cfg.ColorEnabled)
+	printBlocks(merged, maxLocWidth, cfg.UncoveredLimit, cfg.ColorEnabled, cfg.CIMode)
 
 	return hasCritical
 }

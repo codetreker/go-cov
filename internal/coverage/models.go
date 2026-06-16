@@ -34,7 +34,9 @@ func (b *MergedBlock) ShouldPrint() bool {
 // Print outputs the block information with formatting.
 // ANSI color is applied only when colorEnabled is true; otherwise the level and
 // fix-action columns are emitted as plain text so redirected output stays clean.
-func (b *MergedBlock) Print(locWidth int, colorEnabled bool) {
+// In CI mode a CRITICAL block is prefixed with a GitHub Actions error annotation
+// pinned to its file/line.
+func (b *MergedBlock) Print(locWidth int, colorEnabled, ciMode bool) {
 	if b.ShouldPrint() {
 		rangeStr := fmt.Sprintf("%s:(%d:%d)-(%d:%d)", b.File, b.StartLine, b.StartCol, b.EndLine, b.EndCol)
 		linesStr := fmt.Sprintf("%d", b.NumLines)
@@ -52,7 +54,7 @@ func (b *MergedBlock) Print(locWidth int, colorEnabled bool) {
 		case "LOW":
 			level = colorize(level, ColorGreen, colorEnabled)
 		}
-		if cfg.CIMode && b.Level == "CRITICAL" {
+		if ciMode && b.Level == "CRITICAL" {
 			fmt.Printf("::error file=%s,line=%d::", b.File, b.StartLine)
 		}
 		fmt.Printf("%-*s %-6s %-6d %-10s %s\n", locWidth, rangeStr, linesStr, b.EffectiveLines, level, fixAction)

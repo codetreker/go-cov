@@ -12,7 +12,7 @@ import (
 // line, so it must skip the junk line, parse the surrounding valid events, and
 // return.
 func TestParseTestOutputSkipsNonJSONLineAndReturns(t *testing.T) {
-	cfg = Config{ModulePrefix: "covdemo/"}
+	cfg := Config{ModulePrefix: "covdemo/"}
 
 	input := strings.Join([]string{
 		`{"Action":"run","Package":"covdemo/sub","Test":"TestA"}`,
@@ -32,7 +32,7 @@ func TestParseTestOutputSkipsNonJSONLineAndReturns(t *testing.T) {
 	go func() {
 		var p parsed
 		out := captureStdout(t, func() {
-			p.results, p.topLevelCounts, p.subTestCounts = parseTestOutput(strings.NewReader(input))
+			p.results, p.topLevelCounts, p.subTestCounts = parseTestOutput(cfg, strings.NewReader(input))
 		})
 		_ = out
 		done <- p
@@ -64,7 +64,7 @@ func TestParseTestOutputSkipsNonJSONLineAndReturns(t *testing.T) {
 // Lines that do not begin with "{" (blanks, plain log text) must be ignored
 // while a final line lacking a trailing newline is still parsed.
 func TestParseTestOutputParsesFinalLineWithoutNewline(t *testing.T) {
-	cfg = Config{ModulePrefix: "covdemo/"}
+	cfg := Config{ModulePrefix: "covdemo/"}
 
 	// No trailing newline on the last event.
 	input := `{"Action":"run","Package":"covdemo/sub","Test":"TestA"}
@@ -73,7 +73,7 @@ func TestParseTestOutputParsesFinalLineWithoutNewline(t *testing.T) {
 
 	var results []PackageResult
 	captureStdout(t, func() {
-		results, _, _ = parseTestOutput(strings.NewReader(input))
+		results, _, _ = parseTestOutput(cfg, strings.NewReader(input))
 	})
 
 	if len(results) != 1 {

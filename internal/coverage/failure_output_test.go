@@ -35,7 +35,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 // A package that fails to compile must surface the compiler error, not just "FAILED".
 func TestParseTestOutputPrintsBuildFailureDetails(t *testing.T) {
-	cfg = Config{ModulePrefix: "covdemo/"}
+	cfg := Config{ModulePrefix: "covdemo/"}
 
 	input := strings.Join([]string{
 		`{"ImportPath":"covdemo/sub [covdemo/sub.test]","Action":"build-output","Output":"# covdemo/sub [covdemo/sub.test]\n"}`,
@@ -47,7 +47,7 @@ func TestParseTestOutputPrintsBuildFailureDetails(t *testing.T) {
 	}, "\n")
 
 	out := captureStdout(t, func() {
-		parseTestOutput(strings.NewReader(input))
+		parseTestOutput(cfg, strings.NewReader(input))
 	})
 
 	if !strings.Contains(out, "undefined: notAFunction") {
@@ -58,7 +58,7 @@ func TestParseTestOutputPrintsBuildFailureDetails(t *testing.T) {
 // In CI mode a build failure must become a GitHub Actions error annotation
 // pinned to the offending file and line.
 func TestParseTestOutputEmitsCIErrorAnnotationForBuildFailure(t *testing.T) {
-	cfg = Config{ModulePrefix: "covdemo/", CIMode: true}
+	cfg := Config{ModulePrefix: "covdemo/", CIMode: true}
 
 	input := strings.Join([]string{
 		`{"ImportPath":"covdemo/sub [covdemo/sub.test]","Action":"build-output","Output":"# covdemo/sub [covdemo/sub.test]\n"}`,
@@ -70,7 +70,7 @@ func TestParseTestOutputEmitsCIErrorAnnotationForBuildFailure(t *testing.T) {
 	}, "\n")
 
 	out := captureStdout(t, func() {
-		parseTestOutput(strings.NewReader(input))
+		parseTestOutput(cfg, strings.NewReader(input))
 	})
 
 	want := "::error file=sub/sub.go,line=4::undefined: notAFunction"
@@ -81,7 +81,7 @@ func TestParseTestOutputEmitsCIErrorAnnotationForBuildFailure(t *testing.T) {
 
 // Package-level failure output (e.g. a panic outside any single test) must be surfaced.
 func TestParseTestOutputPrintsPackageLevelFailureDetails(t *testing.T) {
-	cfg = Config{ModulePrefix: "covdemo/"}
+	cfg := Config{ModulePrefix: "covdemo/"}
 
 	input := strings.Join([]string{
 		`{"Action":"start","Package":"covdemo"}`,
@@ -92,7 +92,7 @@ func TestParseTestOutputPrintsPackageLevelFailureDetails(t *testing.T) {
 	}, "\n")
 
 	out := captureStdout(t, func() {
-		parseTestOutput(strings.NewReader(input))
+		parseTestOutput(cfg, strings.NewReader(input))
 	})
 
 	if !strings.Contains(out, "boom from a goroutine") {
