@@ -43,3 +43,27 @@ total: (statements) 88.8%
 		t.Fatalf("got %d funcs, want 2 (ForTest must not be filtered): %+v", len(funcs), funcs)
 	}
 }
+
+func TestParseTotalCoverageOutput(t *testing.T) {
+	t.Parallel()
+
+	// A representative `go tool cover -func` output: per-function lines followed
+	// by the trailing "total:" line that this helper must extract.
+	input := `github.com/codetrek/haystack/internal/live.go:10: Run 81.2%
+github.com/codetrek/haystack/internal/live.go:13: Replay 0.0%
+total:							(statements)	88.8%
+`
+	if got := parseTotalCoverageOutput(input); got != 88.8 {
+		t.Fatalf("parseTotalCoverageOutput() = %v, want 88.8", got)
+	}
+}
+
+func TestParseTotalCoverageOutputMissingTotal(t *testing.T) {
+	t.Parallel()
+
+	input := `github.com/codetrek/haystack/internal/live.go:10: Run 81.2%
+`
+	if got := parseTotalCoverageOutput(input); got != 0 {
+		t.Fatalf("parseTotalCoverageOutput() = %v, want 0 when no total line", got)
+	}
+}

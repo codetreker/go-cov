@@ -144,14 +144,20 @@ func Run(c Config) int {
 		return exitCode
 	}
 
-	// Get function coverage data
-	funcData := getFunctionCoverage()
+	// Get function coverage data from a single `go tool cover -func` invocation,
+	// deriving both the per-function list and the total from the same output.
+	funcOutput, err := runFuncCoverage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
+	}
+	funcData := parseFunctionCoverageOutput(funcOutput, cfg)
+	totalCov := parseTotalCoverageOutput(funcOutput)
 
 	// Print function coverage details
 	hasCriticalFunc, funcWidth := printFunctionCoverage(funcData)
 
 	// Print total and check threshold
-	hasCriticalTotal := printTotal(funcWidth)
+	hasCriticalTotal := printTotal(totalCov, funcWidth)
 
 	// Print statistics
 	printStatistics(funcData, topLevelCounts, subTestCounts)
@@ -800,16 +806,16 @@ func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts 
 	return hasCritical
 }
 
-// getFunctionCoverage runs go tool cover -func and parses output
-func getFunctionCoverage() []FuncCoverage {
+// runFuncCoverage runs `go tool cover -func` once and returns its raw output.
+// Both the per-function list and the "total:" line are derived from this single
+// invocation, avoiding a redundant subprocess and re-parse of the same profile.
+func runFuncCoverage() (string, error) {
 	cmd := exec.Command("go", "tool", "cover", "-func="+cfg.CoverProfile)
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
-		return nil
+		return "", err
 	}
-
-	return parseFunctionCoverageOutput(string(output), cfg)
+	return string(output), nil
 }
 
 func parseFunctionCoverageOutput(output string, c Config) []FuncCoverage {
@@ -943,8 +949,7 @@ func printFunctionCoverage(funcs []FuncCoverage) (bool, int) {
 
 // printTotal prints total coverage and checks threshold
 // Returns true if total is below threshold (CRITICAL)
-func printTotal(width int) bool {
-	totalCov := getTotalCoverage()
+func printTotal(totalCov float64, width int) bool {
 	isCritical := totalCov < cfg.ThresholdTotal
 
 	totalStr := fmt.Sprintf("%.1f%%", totalCov)
@@ -968,15 +973,11 @@ func printTotal(width int) bool {
 	return isCritical
 }
 
-// getTotalCoverage calculates total coverage from coverage profile
-func getTotalCoverage() float64 {
-	cmd := exec.Command("go", "tool", "cover", "-func="+cfg.CoverProfile)
-	output, err := cmd.Output()
-	if err != nil {
-		return 0
-	}
-
-	lines := strings.Split(string(output), "\n")
+// parseTotalCoverageOutput extracts the overall coverage percentage from the
+// "total:" line of `go tool cover -func` output. It returns 0 when no total line
+// is present.
+func parseTotalCoverageOutput(output string) float64 {
+	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "total:") {
 			fields := strings.Fields(line)
