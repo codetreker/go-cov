@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -143,6 +145,19 @@ func Run(c Config) int {
 	}
 	cfg.CoverProfile = profile
 	defer cleanup()
+
+	// The deferred cleanup above does not run when the process is terminated by a
+	// signal (the normal path exits via os.Exit in main, which also skips defers,
+	// but Run returns there cleanly; an interrupt does not). Install a handler that
+	// removes the temp profile before exiting so SIGINT/SIGTERM does not leak it.
+	// os.Remove of an already-removed or explicitly configured file is harmless.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cleanup()
+		os.Exit(1)
+	}()
 
 	if len(cfg.ModulePrefixes) == 0 && cfg.ModulePrefix == "" {
 		fmt.Fprintln(os.Stderr, "go-cov: no module path detected; displayed paths will not be shortened. Pass --module-prefix to set one.")
