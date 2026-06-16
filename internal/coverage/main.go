@@ -483,7 +483,12 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 	results := make(map[string]*PackageResult)
 	topLevelCounts := make(map[string]int)
 	subTestCounts := make(map[string]int)
-	decoder := json.NewDecoder(r)
+	// Read line-by-line rather than streaming through a json.Decoder: a Decoder
+	// does not advance past a malformed token, so a single non-JSON line would
+	// make every subsequent Decode return the same error and spin the loop. We
+	// use bufio.Reader.ReadString instead of bufio.Scanner because Scanner caps
+	// lines at 64KB and `go test -json` output lines can exceed that.
+	br := bufio.NewReader(r)
 
 	// Track which packages we've printed and their start times
 	printedPackages := make(map[string]bool)
@@ -499,99 +504,21 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 	buildOutputs := make(map[string][]string)
 
 	for {
-		var event TestEvent
-		if err := decoder.Decode(&event); err != nil {
-			if err == io.EOF {
-				break
-			}
-			continue
-		}
+		line, readErr := br.ReadString('\n')
 
-		// Build failures stream their detail as build-output events keyed by
-		// ImportPath, with an empty Package. Buffer them under the package name so
-		// they can be printed when the package's fail event arrives.
-		if event.Action == "build-output" {
-			bpkg := buildFailurePackage(event.ImportPath)
-			buildOutputs[bpkg] = append(buildOutputs[bpkg], event.Output)
-			continue
-		}
-
-		pkg := cfg.stripModulePrefix(event.Package)
-
-		// Build key for output buffering
-		outputKey := pkg
-		if event.Test != "" {
-			outputKey = pkg + "/" + event.Test
-		}
-
-		// Count tests separately: top-level vs subtests
-		if event.Action == "run" && event.Test != "" {
-			// Print package start only once (when first test runs)
-			if !printedPackages[pkg] {
-				now := time.Now()
-				packageStartTimes[pkg] = now
-				fmt.Printf("[%s] Testing %s...\n", now.Format("15:04:05"), pkg)
-				printedPackages[pkg] = true
-			}
-
-			if strings.Contains(event.Test, "/") {
-				subTestCounts[pkg]++
-			} else {
-				topLevelCounts[pkg]++
+		if trimmed := strings.TrimSpace(line); trimmed != "" && strings.HasPrefix(trimmed, "{") {
+			var event TestEvent
+			if err := json.Unmarshal([]byte(trimmed), &event); err == nil {
+				processTestEvent(event, results, topLevelCounts, subTestCounts,
+					printedPackages, packageStartTimes, testOutputs, buildOutputs)
 			}
 		}
 
-		// Print package completion time
-		if event.Action == "pass" && event.Test == "" {
-			if startTime, ok := packageStartTimes[pkg]; ok {
-				elapsed := time.Since(startTime)
-				fmt.Printf("[%s] ✓ %s completed (%.2fs)\n", time.Now().Format("15:04:05"), pkg, elapsed.Seconds())
-			}
-		}
-
-		// Buffer output for each test
-		if event.Action == "output" {
-			// Parse coverage/result lines
-			if strings.HasPrefix(event.Output, "ok") {
-				parsePackageResult(event.Output, results)
-			} else if strings.HasPrefix(event.Output, "FAIL") {
-				parsePackageResult(event.Output, results)
-			} else if strings.HasPrefix(event.Output, "?") {
-				parsePackageResult(event.Output, results)
-			} else {
-				// Buffer output for potential failure
-				testOutputs[outputKey] = append(testOutputs[outputKey], event.Output)
-			}
-		}
-
-		// On test failure, print buffered output
-		if event.Action == "fail" && event.Test != "" {
-			if outputs, ok := testOutputs[outputKey]; ok {
-				fmt.Printf("\n=== FAIL: %s/%s ===\n", pkg, event.Test)
-				for _, out := range outputs {
-					fmt.Print(out)
-				}
-			}
-			delete(testOutputs, outputKey)
-		}
-
-		// On package-level failure, surface the reason: a build error if the
-		// package failed to compile, otherwise any buffered package-scope output
-		// (e.g. a panic in a goroutine or output before a crash) that was never
-		// attributed to an individual test.
-		if event.Action == "fail" && event.Test == "" {
-			if bo, ok := buildOutputs[pkg]; ok {
-				printBuildFailure(pkg, bo)
-				delete(buildOutputs, pkg)
-			} else if outputs, ok := testOutputs[pkg]; ok && len(outputs) > 0 {
-				printPackageFailure(pkg, outputs)
-			}
-			delete(testOutputs, pkg)
-		}
-
-		// Clean up on pass
-		if event.Action == "pass" && event.Test != "" {
-			delete(testOutputs, outputKey)
+		if readErr != nil {
+			// io.EOF (and any other read error) terminates parsing. ReadString
+			// may return a final partial line alongside the error, which the
+			// block above has already handled.
+			break
 		}
 	}
 
@@ -602,6 +529,106 @@ func parseTestOutput(r io.Reader) ([]PackageResult, map[string]int, map[string]i
 	}
 
 	return resultSlice, topLevelCounts, subTestCounts
+}
+
+// processTestEvent applies a single decoded go-test JSON event to the running
+// parse state: buffering build/test output, printing package start/finish and
+// failure detail, and counting top-level vs subtests.
+func processTestEvent(
+	event TestEvent,
+	results map[string]*PackageResult,
+	topLevelCounts, subTestCounts map[string]int,
+	printedPackages map[string]bool,
+	packageStartTimes map[string]time.Time,
+	testOutputs, buildOutputs map[string][]string,
+) {
+
+	// Build failures stream their detail as build-output events keyed by
+	// ImportPath, with an empty Package. Buffer them under the package name so
+	// they can be printed when the package's fail event arrives.
+	if event.Action == "build-output" {
+		bpkg := buildFailurePackage(event.ImportPath)
+		buildOutputs[bpkg] = append(buildOutputs[bpkg], event.Output)
+		return
+	}
+
+	pkg := cfg.stripModulePrefix(event.Package)
+
+	// Build key for output buffering
+	outputKey := pkg
+	if event.Test != "" {
+		outputKey = pkg + "/" + event.Test
+	}
+
+	// Count tests separately: top-level vs subtests
+	if event.Action == "run" && event.Test != "" {
+		// Print package start only once (when first test runs)
+		if !printedPackages[pkg] {
+			now := time.Now()
+			packageStartTimes[pkg] = now
+			fmt.Printf("[%s] Testing %s...\n", now.Format("15:04:05"), pkg)
+			printedPackages[pkg] = true
+		}
+
+		if strings.Contains(event.Test, "/") {
+			subTestCounts[pkg]++
+		} else {
+			topLevelCounts[pkg]++
+		}
+	}
+
+	// Print package completion time
+	if event.Action == "pass" && event.Test == "" {
+		if startTime, ok := packageStartTimes[pkg]; ok {
+			elapsed := time.Since(startTime)
+			fmt.Printf("[%s] ✓ %s completed (%.2fs)\n", time.Now().Format("15:04:05"), pkg, elapsed.Seconds())
+		}
+	}
+
+	// Buffer output for each test
+	if event.Action == "output" {
+		// Parse coverage/result lines
+		if strings.HasPrefix(event.Output, "ok") {
+			parsePackageResult(event.Output, results)
+		} else if strings.HasPrefix(event.Output, "FAIL") {
+			parsePackageResult(event.Output, results)
+		} else if strings.HasPrefix(event.Output, "?") {
+			parsePackageResult(event.Output, results)
+		} else {
+			// Buffer output for potential failure
+			testOutputs[outputKey] = append(testOutputs[outputKey], event.Output)
+		}
+	}
+
+	// On test failure, print buffered output
+	if event.Action == "fail" && event.Test != "" {
+		if outputs, ok := testOutputs[outputKey]; ok {
+			fmt.Printf("\n=== FAIL: %s/%s ===\n", pkg, event.Test)
+			for _, out := range outputs {
+				fmt.Print(out)
+			}
+		}
+		delete(testOutputs, outputKey)
+	}
+
+	// On package-level failure, surface the reason: a build error if the
+	// package failed to compile, otherwise any buffered package-scope output
+	// (e.g. a panic in a goroutine or output before a crash) that was never
+	// attributed to an individual test.
+	if event.Action == "fail" && event.Test == "" {
+		if bo, ok := buildOutputs[pkg]; ok {
+			printBuildFailure(pkg, bo)
+			delete(buildOutputs, pkg)
+		} else if outputs, ok := testOutputs[pkg]; ok && len(outputs) > 0 {
+			printPackageFailure(pkg, outputs)
+		}
+		delete(testOutputs, pkg)
+	}
+
+	// Clean up on pass
+	if event.Action == "pass" && event.Test != "" {
+		delete(testOutputs, outputKey)
+	}
 }
 
 // buildFailurePackage extracts the display package name from a build event's
