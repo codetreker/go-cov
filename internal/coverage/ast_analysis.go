@@ -52,7 +52,6 @@ type BlockAnalysis struct {
 	FuncCallCount   int  // function calls
 	BranchCount     int  // if, switch, for, range (cyclomatic complexity)
 	FuncCount       int  // number of functions
-	StatementCount  int  // executable statements
 }
 
 // Score calculates a priority score based on analysis
@@ -221,16 +220,12 @@ func analyzeASTInRange(file *ast.File, fset *token.FileSet, startLine, startCol,
 			analysis.HasConcurrency = true
 
 		case *ast.ReturnStmt:
-			analysis.StatementCount++
 			// Check if returning an error
 			for _, result := range v.Results {
 				if isErrorExpr(result) {
 					analysis.HasErrorHandle = true
 				}
 			}
-
-		case *ast.AssignStmt, *ast.ExprStmt, *ast.DeferStmt:
-			analysis.StatementCount++
 
 		case *ast.CaseClause:
 			analysis.BranchCount++
@@ -300,218 +295,6 @@ func isErrorExpr(expr ast.Expr) bool {
 	return false
 }
 
-// isInsideSelectCase checks if the code block is inside a select case (CommClause).
-// Select cases handling context cancellation, channel closes, timeouts are typically
-// hard to test reliably in unit tests.
-func isInsideSelectCase(file *ast.File, fset *token.FileSet, startLine, endLine int) bool {
-	found := false
-
-	ast.Inspect(file, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if n == nil {
-			return true
-		}
-
-		// Look for CommClause (case in select statement)
-		commClause, ok := n.(*ast.CommClause)
-		if !ok {
-			return true
-		}
-
-		// Check if our block is within this comm clause
-		clauseStart := fset.Position(commClause.Pos()).Line
-		clauseEnd := fset.Position(commClause.End()).Line
-
-		// Block must be inside the comm clause body
-		if startLine >= clauseStart && endLine <= clauseEnd {
-			// Check if the block contains only simple statements (log/return/continue)
-			// within the comm clause context
-			if containsOnlySimpleStatements(commClause.Body, fset, startLine, endLine) {
-				found = true
-				return false
-			}
-		}
-
-		return true
-	})
-
-	return found
-}
-
-// containsOnlySimpleStatements checks if the statements in a comm clause that overlap
-// with the given line range are simple (return, log, continue, break)
-func containsOnlySimpleStatements(stmts []ast.Stmt, fset *token.FileSet, startLine, endLine int) bool {
-	for _, stmt := range stmts {
-		stmtStart := fset.Position(stmt.Pos()).Line
-		stmtEnd := fset.Position(stmt.End()).Line
-
-		// Check if this statement overlaps with our block
-		if stmtEnd < startLine || stmtStart > endLine {
-			continue
-		}
-
-		// This statement is in our range, check if it's simple
-		if !isSimpleStatement(stmt) {
-			return false
-		}
-	}
-	return true
-}
-
-// isInsideGoroutineErrorPath checks if the code block is inside a goroutine (go func())
-// and contains only simple error logging/handling statements.
-// Goroutine error handlers for server Start/Listen/Serve are typically hard to test.
-func isInsideGoroutineErrorPath(file *ast.File, fset *token.FileSet, startLine, endLine int) bool {
-	found := false
-
-	ast.Inspect(file, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		if n == nil {
-			return true
-		}
-
-		// Look for go statements (goroutines)
-		goStmt, ok := n.(*ast.GoStmt)
-		if !ok {
-			return true
-		}
-
-		// Get the goroutine's function body
-		var funcBody *ast.BlockStmt
-		switch fn := goStmt.Call.Fun.(type) {
-		case *ast.FuncLit:
-			funcBody = fn.Body
-		default:
-			return true
-		}
-
-		if funcBody == nil {
-			return true
-		}
-
-		// Check if our block is within this goroutine
-		goStart := fset.Position(goStmt.Pos()).Line
-		goEnd := fset.Position(goStmt.End()).Line
-
-		if startLine >= goStart && endLine <= goEnd {
-			// Check if the overlapping statements are simple (log/return)
-			if containsOnlySimpleStatementsInBlock(funcBody, fset, startLine, endLine) {
-				found = true
-				return false
-			}
-		}
-
-		return true
-	})
-
-	return found
-}
-
-// containsOnlySimpleStatementsInBlock checks if statements in a block that overlap
-// with the given line range are simple (return, log, continue, break)
-func containsOnlySimpleStatementsInBlock(block *ast.BlockStmt, fset *token.FileSet, startLine, endLine int) bool {
-	if block == nil {
-		return true
-	}
-
-	for _, stmt := range block.List {
-		stmtStart := fset.Position(stmt.Pos()).Line
-		stmtEnd := fset.Position(stmt.End()).Line
-
-		// Check if this statement overlaps with our block
-		if stmtEnd < startLine || stmtStart > endLine {
-			continue
-		}
-
-		// This statement is in our range, check if it's simple
-		if !isSimpleStatement(stmt) {
-			return false
-		}
-	}
-	return true
-}
-
-// isSimpleStatement checks if a statement is simple (typically used for cleanup)
-func isSimpleStatement(stmt ast.Stmt) bool {
-	switch s := stmt.(type) {
-	case *ast.ReturnStmt:
-		return true
-	case *ast.BranchStmt: // break, continue, goto, fallthrough
-		return true
-	case *ast.ExprStmt:
-		if call, ok := s.X.(*ast.CallExpr); ok {
-			return isLoggingCall(call)
-		}
-		return false
-	case *ast.IfStmt:
-		// For if statements, check if both branches are simple
-		// and the body is simple (typically: if !ok { log; return })
-		bodySimple := isSimpleBlockStmt(s.Body)
-		elseSimple := true
-		if s.Else != nil {
-			if elseBlock, ok := s.Else.(*ast.BlockStmt); ok {
-				elseSimple = isSimpleBlockStmt(elseBlock)
-			} else if elseIf, ok := s.Else.(*ast.IfStmt); ok {
-				elseSimple = isSimpleStatement(elseIf)
-			}
-		}
-		return bodySimple && elseSimple
-	case *ast.BlockStmt:
-		return isSimpleBlockStmt(s)
-	default:
-		return false
-	}
-}
-
-// isSimpleBlockStmt checks if a block statement contains only simple statements
-func isSimpleBlockStmt(block *ast.BlockStmt) bool {
-	if block == nil {
-		return true
-	}
-	for _, stmt := range block.List {
-		if !isSimpleStatement(stmt) {
-			return false
-		}
-	}
-	return true
-}
-
-// isLoggingCall checks if a call expression is a logging call
-func isLoggingCall(call *ast.CallExpr) bool {
-	switch fn := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		// Method call: log.Println, logger.Info, etc.
-		methodName := strings.ToLower(fn.Sel.Name)
-		loggingMethods := []string{
-			"print", "println", "printf",
-			"log", "logf",
-			"info", "infof",
-			"warn", "warnf", "warning",
-			"error", "errorf",
-			"debug", "debugf",
-			"trace", "tracef",
-			"fatal", "fatalf",
-			"panic", "panicf",
-		}
-		for _, m := range loggingMethods {
-			if strings.Contains(methodName, m) {
-				return true
-			}
-		}
-	case *ast.Ident:
-		// Direct function call: println, print
-		funcName := strings.ToLower(fn.Name)
-		if funcName == "println" || funcName == "print" || funcName == "panic" {
-			return true
-		}
-	}
-	return false
-}
-
 // classifyByEffectiveLines is a fallback when AST parsing fails
 func classifyByEffectiveLines(effectiveLines int) string {
 	switch {
@@ -545,11 +328,4 @@ func isLineIgnorable(line string) bool {
 		return true
 	}
 	return false
-}
-
-// AnalyzeBlock is a legacy function kept for compatibility - now deprecated
-func (fc *FileCache) AnalyzeBlock(b *MergedBlock) {
-	// This is kept for backward compatibility but should use AnalyzeBlockWithAST
-	astCache := NewASTCache()
-	AnalyzeBlockWithAST(b, astCache, fc)
 }
