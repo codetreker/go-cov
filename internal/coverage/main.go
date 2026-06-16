@@ -762,7 +762,11 @@ func printPackageSummary(results []PackageResult, topLevelCounts, subTestCounts 
 						r.Status, r.Name, duration, coverageStr, cfg.ThresholdPackage)
 				} else {
 					coverageStr = fmt.Sprintf("%s%s%s (CRITICAL: < %.0f%%)", ColorRed, r.CoverageStr, ColorReset, cfg.ThresholdPackage)
-					fmt.Printf("%-3s %-40s %-10s %-7d %s\n", r.Status, r.Name, duration, total, coverageStr)
+					if cfg.ShowTestCounts {
+						fmt.Printf("%-3s %-40s %-10s %-7d %s\n", r.Status, r.Name, duration, total, coverageStr)
+					} else {
+						fmt.Printf("%-3s %-40s %-10s %s\n", r.Status, r.Name, duration, coverageStr)
+					}
 				}
 			} else {
 				if cfg.ShowTestCounts {
