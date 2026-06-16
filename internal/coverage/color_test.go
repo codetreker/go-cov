@@ -1,6 +1,7 @@
 package coverage
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -22,9 +23,9 @@ func TestPackageSummaryNoANSIWhenColorDisabled(t *testing.T) {
 		{Name: "broken", Status: "FAIL"},
 	}
 
-	out := captureStdout(t, func() {
-		printPackageSummary(cfg, results, map[string]int{}, map[string]int{})
-	})
+	var buf bytes.Buffer
+	printPackageSummary(&buf, cfg, results, map[string]int{}, map[string]int{})
+	out := buf.String()
 
 	if containsANSI(out) {
 		t.Fatalf("output contained ANSI escapes when color disabled:\n%q", out)
@@ -43,9 +44,9 @@ func TestPackageSummaryEmitsANSIWhenColorEnabled(t *testing.T) {
 		{Name: "low", Status: "ok", Duration: "0.10s", Coverage: 50.0, CoverageStr: "50.0%"},
 	}
 
-	out := captureStdout(t, func() {
-		printPackageSummary(cfg, results, map[string]int{}, map[string]int{})
-	})
+	var buf bytes.Buffer
+	printPackageSummary(&buf, cfg, results, map[string]int{}, map[string]int{})
+	out := buf.String()
 
 	if !strings.Contains(out, ColorRed) {
 		t.Fatalf("expected ANSI red escape when color enabled:\n%q", out)
@@ -60,9 +61,9 @@ func TestMergedBlockPrintNoANSIWhenColorDisabled(t *testing.T) {
 		NumLines: 3, EffectiveLines: 3, Level: "CRITICAL", FixAction: "Required",
 	}
 
-	out := captureStdout(t, func() {
-		block.Print(20, false, false)
-	})
+	var buf bytes.Buffer
+	block.Print(&buf, 20, false, false)
+	out := buf.String()
 
 	if containsANSI(out) {
 		t.Fatalf("block output contained ANSI escapes when color disabled:\n%q", out)
@@ -79,9 +80,9 @@ func TestMergedBlockPrintEmitsANSIWhenColorEnabled(t *testing.T) {
 		NumLines: 3, EffectiveLines: 3, Level: "CRITICAL", FixAction: "Required",
 	}
 
-	out := captureStdout(t, func() {
-		block.Print(20, true, false)
-	})
+	var buf bytes.Buffer
+	block.Print(&buf, 20, true, false)
+	out := buf.String()
 
 	if !strings.Contains(out, ColorRed) {
 		t.Fatalf("expected ANSI red escape when color enabled:\n%q", out)

@@ -1,6 +1,9 @@
 package coverage
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 // Block represents a single coverage block from the coverage file
 type Block struct {
@@ -36,7 +39,7 @@ func (b *MergedBlock) ShouldPrint() bool {
 // fix-action columns are emitted as plain text so redirected output stays clean.
 // In CI mode a CRITICAL block is prefixed with a GitHub Actions error annotation
 // pinned to its file/line.
-func (b *MergedBlock) Print(locWidth int, colorEnabled, ciMode bool) {
+func (b *MergedBlock) Print(out io.Writer, locWidth int, colorEnabled, ciMode bool) {
 	if b.ShouldPrint() {
 		rangeStr := fmt.Sprintf("%s:(%d:%d)-(%d:%d)", b.File, b.StartLine, b.StartCol, b.EndLine, b.EndCol)
 		linesStr := fmt.Sprintf("%d", b.NumLines)
@@ -55,8 +58,8 @@ func (b *MergedBlock) Print(locWidth int, colorEnabled, ciMode bool) {
 			level = colorize(level, ColorGreen, colorEnabled)
 		}
 		if ciMode && b.Level == "CRITICAL" {
-			fmt.Printf("::error file=%s,line=%d::", b.File, b.StartLine)
+			fmt.Fprintf(out, "::error file=%s,line=%d::", b.File, b.StartLine)
 		}
-		fmt.Printf("%-*s %-6s %-6d %-10s %s\n", locWidth, rangeStr, linesStr, b.EffectiveLines, level, fixAction)
+		fmt.Fprintf(out, "%-*s %-6s %-6d %-10s %s\n", locWidth, rangeStr, linesStr, b.EffectiveLines, level, fixAction)
 	}
 }

@@ -1,6 +1,7 @@
 package coverage
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -31,10 +32,8 @@ func TestParseTestOutputSkipsNonJSONLineAndReturns(t *testing.T) {
 	done := make(chan parsed, 1)
 	go func() {
 		var p parsed
-		out := captureStdout(t, func() {
-			p.results, p.topLevelCounts, p.subTestCounts = parseTestOutput(cfg, strings.NewReader(input))
-		})
-		_ = out
+		var buf bytes.Buffer
+		p.results, p.topLevelCounts, p.subTestCounts = parseTestOutput(&buf, cfg, strings.NewReader(input))
 		done <- p
 	}()
 
@@ -72,9 +71,8 @@ func TestParseTestOutputParsesFinalLineWithoutNewline(t *testing.T) {
 		`{"Action":"output","Package":"covdemo/sub","Output":"ok  \tcovdemo/sub\t0.010s\tcoverage: 50.0% of statements\n"}`
 
 	var results []PackageResult
-	captureStdout(t, func() {
-		results, _, _ = parseTestOutput(cfg, strings.NewReader(input))
-	})
+	var buf bytes.Buffer
+	results, _, _ = parseTestOutput(&buf, cfg, strings.NewReader(input))
 
 	if len(results) != 1 {
 		t.Fatalf("got %d package results, want 1: %+v", len(results), results)

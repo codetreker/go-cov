@@ -1,6 +1,7 @@
 package coverage
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -19,9 +20,9 @@ func TestPackageSummaryCriticalRowOmitsTestCountWhenDisabled(t *testing.T) {
 	topLevel := map[string]int{"pkg": 7}
 	subTests := map[string]int{"pkg": 0}
 
-	out := captureStdout(t, func() {
-		printPackageSummary(cfg, results, topLevel, subTests)
-	})
+	var buf bytes.Buffer
+	printPackageSummary(&buf, cfg, results, topLevel, subTests)
+	out := buf.String()
 
 	// The header omits TESTS, so the CRITICAL row must not carry a test count.
 	if strings.Contains(out, "TESTS") {
@@ -57,9 +58,9 @@ func TestPackageSummaryCriticalRowKeepsTestCountWhenEnabled(t *testing.T) {
 	topLevel := map[string]int{"pkg": 6}
 	subTests := map[string]int{"pkg": 3}
 
-	out := captureStdout(t, func() {
-		printPackageSummary(cfg, results, topLevel, subTests)
-	})
+	var buf bytes.Buffer
+	printPackageSummary(&buf, cfg, results, topLevel, subTests)
+	out := buf.String()
 
 	var criticalLine string
 	for _, line := range strings.Split(out, "\n") {
