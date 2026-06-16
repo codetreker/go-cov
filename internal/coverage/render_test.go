@@ -213,26 +213,42 @@ func TestPrintStatisticsOmitsTestTotalsWhenDisabled(t *testing.T) {
 	}
 }
 
-// printBlocks renders printable blocks and reports a "more" tail when LOW-level
-// blocks (which are not printed) and the limit elide some entries. A CRITICAL
-// block is always rendered.
+// printBlocks renders printable (non-LOW) blocks; LOW blocks are omitted and a
+// "... N more ..." tail is shown when the limit elides some non-critical entries.
+// CRITICAL blocks are always rendered regardless of the limit.
 func TestPrintBlocks(t *testing.T) {
 	merged := []MergedBlock{
 		{File: "a.go", StartLine: 1, StartCol: 1, EndLine: 3, EndCol: 1,
 			NumLines: 2, EffectiveLines: 2, Level: "CRITICAL", FixAction: "Required"},
 		{File: "b.go", StartLine: 5, StartCol: 1, EndLine: 6, EndCol: 1,
 			NumLines: 1, EffectiveLines: 1, Level: "HIGH", FixAction: "Recommended"},
+		{File: "c.go", StartLine: 8, StartCol: 1, EndLine: 9, EndCol: 1,
+			NumLines: 1, EffectiveLines: 1, Level: "HIGH", FixAction: "Recommended"},
+		{File: "low.go", StartLine: 11, StartCol: 1, EndLine: 12, EndCol: 1,
+			NumLines: 1, EffectiveLines: 1, Level: "LOW", FixAction: ""},
 	}
 
+	// limit=1: CRITICAL always prints, one non-critical prints, the remaining
+	// non-critical block is elided into the "more" tail, and the LOW block is
+	// omitted entirely (and not counted).
 	var buf bytes.Buffer
-	printBlocks(&buf, merged, 20, 10, false, false)
+	printBlocks(&buf, merged, 20, 1, false, false)
 	out := buf.String()
 
 	if !strings.Contains(out, "a.go") || !strings.Contains(out, "CRITICAL") {
 		t.Fatalf("missing CRITICAL block in output:\n%s", out)
 	}
-	if !strings.Contains(out, "b.go") || !strings.Contains(out, "HIGH") {
-		t.Fatalf("missing HIGH block in output:\n%s", out)
+	if !strings.Contains(out, "b.go") {
+		t.Fatalf("expected the first non-critical block to render:\n%s", out)
+	}
+	if strings.Contains(out, "c.go") {
+		t.Fatalf("non-critical block past the limit should be elided, not printed:\n%s", out)
+	}
+	if strings.Contains(out, "low.go") {
+		t.Fatalf("LOW block must not be rendered:\n%s", out)
+	}
+	if !strings.Contains(out, "... 1 more ...") {
+		t.Fatalf("expected elision tail '... 1 more ...':\n%s", out)
 	}
 }
 

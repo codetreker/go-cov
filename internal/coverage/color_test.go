@@ -2,6 +2,7 @@ package coverage
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,34 @@ import (
 // which is the prefix of every color code this tool emits.
 func containsANSI(s string) bool {
 	return strings.Contains(s, "\033[")
+}
+
+// detectColorEnabled is the actual NO_COLOR/TTY decision. NO_COLOR disables color
+// unconditionally; otherwise color is enabled only for an *os.File that is a
+// character device (a terminal). Non-file and non-terminal destinations are plain.
+func TestDetectColorEnabled(t *testing.T) {
+	// NO_COLOR set => disabled even for a real terminal handle.
+	t.Setenv("NO_COLOR", "1")
+	if detectColorEnabled(os.Stdout) {
+		t.Fatal("color must be disabled when NO_COLOR is set")
+	}
+
+	// Empty NO_COLOR is treated as unset (per the convention). A non-*os.File
+	// writer is never a terminal.
+	t.Setenv("NO_COLOR", "")
+	if detectColorEnabled(&bytes.Buffer{}) {
+		t.Fatal("color must be disabled for a non-*os.File writer")
+	}
+
+	// A regular file is an *os.File but not a character device.
+	f, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if detectColorEnabled(f) {
+		t.Fatal("color must be disabled when writing to a regular file")
+	}
 }
 
 // With color disabled, rendered output must be plain text with no ANSI escapes,
@@ -36,12 +65,14 @@ func TestPackageSummaryNoANSIWhenColorDisabled(t *testing.T) {
 	}
 }
 
-// With color enabled, the same below-threshold package must still be colorized.
+// With color enabled, the below-threshold package and the FAIL row must both be
+// colorized (the FAIL row is a distinct colorized branch).
 func TestPackageSummaryEmitsANSIWhenColorEnabled(t *testing.T) {
 	cfg := Config{ThresholdPackage: 85.0, ShowTestCounts: true, ColorEnabled: true}
 
 	results := []PackageResult{
 		{Name: "low", Status: "ok", Duration: "0.10s", Coverage: 50.0, CoverageStr: "50.0%"},
+		{Name: "broken", Status: "FAIL"},
 	}
 
 	var buf bytes.Buffer
@@ -50,6 +81,21 @@ func TestPackageSummaryEmitsANSIWhenColorEnabled(t *testing.T) {
 
 	if !strings.Contains(out, ColorRed) {
 		t.Fatalf("expected ANSI red escape when color enabled:\n%q", out)
+	}
+
+	// The FAIL row specifically must be wrapped in color.
+	var failLine string
+	for _, ln := range strings.Split(out, "\n") {
+		if strings.Contains(ln, "[FAILED]") {
+			failLine = ln
+			break
+		}
+	}
+	if failLine == "" {
+		t.Fatalf("no [FAILED] row in output:\n%s", out)
+	}
+	if !containsANSI(failLine) {
+		t.Fatalf("FAIL row not colorized when color enabled: %q", failLine)
 	}
 }
 

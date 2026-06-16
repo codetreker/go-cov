@@ -4,6 +4,7 @@ package coverage
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -21,6 +23,7 @@ import (
 // errors continue to go to os.Stderr.
 func Run(out io.Writer, c Config) int {
 	cfg := normalizeConfig(c)
+	cfg.ColorEnabled = detectColorEnabled(out)
 
 	profile, cleanup, err := resolveCoverProfile(cfg.CoverProfile)
 	if err != nil {
@@ -28,20 +31,29 @@ func Run(out io.Writer, c Config) int {
 		return 1
 	}
 	cfg.CoverProfile = profile
-	defer cleanup()
+
+	// Guard cleanup so the deferred call and the signal handler below cannot
+	// double-remove the temp profile, and so it runs at most once.
+	var cleanupOnce sync.Once
+	safeCleanup := func() { cleanupOnce.Do(cleanup) }
+	defer safeCleanup()
+
+	// go test can run for minutes; cancel it if we are interrupted.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// The deferred cleanup above does not run when the process is terminated by a
-	// signal (the normal path exits via os.Exit in main, which also skips defers,
-	// but Run returns there cleanly; an interrupt does not). Install a handler that
-	// removes the temp profile before exiting so SIGINT/SIGTERM does not leak it.
-	// os.Remove of an already-removed or explicitly configured file is harmless.
+	// signal. Install a handler that cancels the in-flight `go test`, removes the
+	// temp profile, and exits, so SIGINT/SIGTERM neither leaks the profile nor
+	// orphans the test subprocess. The handler is scoped to this call: signal.Stop
+	// and closing done stop the registration and let the goroutine return on Run's
+	// normal exit, so repeated in-process callers do not leak.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		cleanup()
-		os.Exit(1)
-	}()
+	defer signal.Stop(sigCh)
+	done := make(chan struct{})
+	defer close(done)
+	onSignalCleanup(sigCh, done, func() { cancel(); safeCleanup() }, os.Exit)
 
 	if len(cfg.ModulePrefixes) == 0 && cfg.ModulePrefix == "" {
 		fmt.Fprintln(os.Stderr, "go-cov: no module path detected; displayed paths will not be shortened. Pass --module-prefix to set one.")
@@ -52,7 +64,7 @@ func Run(out io.Writer, c Config) int {
 	fmt.Fprintf(out, "[%s] Starting test run...\n\n", startTime.Format("15:04:05"))
 
 	// Run tests and collect results
-	results, topLevelCounts, subTestCounts, exitCode := runTests(out, cfg)
+	results, topLevelCounts, subTestCounts, exitCode := runTests(ctx, out, cfg)
 	if exitCode != 0 && len(results) == 0 {
 		return exitCode
 	}
@@ -139,8 +151,22 @@ func buildTestArgs(cfg Config, pkgs []string) []string {
 	return args
 }
 
+// onSignalCleanup runs onSignal then exit(1) when a signal arrives on sigCh, and
+// returns without doing anything when done is closed (Run's normal-exit path). It
+// is factored out so the signal path can be tested without sending real OS signals.
+func onSignalCleanup(sigCh <-chan os.Signal, done <-chan struct{}, onSignal func(), exit func(int)) {
+	go func() {
+		select {
+		case <-sigCh:
+			onSignal()
+			exit(1)
+		case <-done:
+		}
+	}()
+}
+
 // runTests executes go test and parses JSON output
-func runTests(out io.Writer, cfg Config) ([]PackageResult, map[string]int, map[string]int, int) {
+func runTests(ctx context.Context, out io.Writer, cfg Config) ([]PackageResult, map[string]int, map[string]int, int) {
 	// Build package list
 	pkgCmd := exec.Command("go", "list", "./...")
 	pkgOutput, err := pkgCmd.Output()
@@ -172,7 +198,7 @@ func runTests(out io.Writer, cfg Config) ([]PackageResult, map[string]int, map[s
 
 	args := buildTestArgs(cfg, pkgs)
 
-	cmd := exec.Command("go", args...)
+	cmd := exec.CommandContext(ctx, "go", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating stdout pipe: %v\n", err)

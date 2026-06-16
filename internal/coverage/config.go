@@ -316,7 +316,6 @@ func normalizeConfig(c Config) Config {
 	if c.TestTimeout == "" {
 		c.TestTimeout = "15m"
 	}
-	c.ColorEnabled = detectColorEnabled()
 	return c
 }
 

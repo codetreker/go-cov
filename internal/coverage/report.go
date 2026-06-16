@@ -17,18 +17,23 @@ const (
 	ColorReset  = "\033[0m"
 )
 
-// detectColorEnabled reports whether ANSI color escapes should be emitted.
+// detectColorEnabled reports whether ANSI color escapes should be emitted to out.
 // Color is disabled when the NO_COLOR environment variable is present and
-// non-empty (per the https://no-color.org convention) or when stdout is not a
-// character device (e.g. redirected to a file or piped), so plain text is
-// written to non-terminals. TTY detection uses only the standard library.
-func detectColorEnabled() bool {
+// non-empty (per the https://no-color.org convention), or when out is not a
+// terminal — i.e. not an *os.File character device (e.g. a bytes.Buffer, a file,
+// or a pipe) — so plain text is written to non-terminals. Keying off the actual
+// destination writer keeps the decision consistent with where output really goes.
+// TTY detection uses only the standard library.
+func detectColorEnabled(out io.Writer) bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
-	fi, err := os.Stdout.Stat()
-	isTTY := err == nil && fi.Mode()&os.ModeCharDevice != 0
-	return isTTY
+	f, ok := out.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 // colorize wraps s in the given ANSI color code when color is enabled,
