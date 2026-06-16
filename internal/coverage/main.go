@@ -1094,10 +1094,10 @@ func analyzeUncoveredBlocks() bool {
 		return false
 	}
 
-	merged := mergeBlocks(blocks)
+	fileCache := NewFileCache()
+	merged := mergeBlocks(blocks, fileCache)
 
 	// Analyze blocks using AST
-	fileCache := NewFileCache()
 	astCache := NewASTCache()
 	for i := range merged {
 		AnalyzeBlockWithAST(&merged[i], astCache, fileCache)

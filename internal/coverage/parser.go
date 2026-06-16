@@ -64,10 +64,9 @@ func parseLine(line string, c Config) (Block, bool) {
 }
 
 // mergeBlocks merges adjacent uncovered blocks into larger blocks
-func mergeBlocks(blocks []Block) []MergedBlock {
+func mergeBlocks(blocks []Block, fileCache *FileCache) []MergedBlock {
 	var result []MergedBlock
 	var current *MergedBlock
-	fileCache := NewFileCache()
 
 	for _, b := range blocks {
 		if b.Count > 0 {
