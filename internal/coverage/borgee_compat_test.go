@@ -29,14 +29,14 @@ func TestConfigFromEnvBorgeeCoverageOverrides(t *testing.T) {
 }
 
 func TestBuildTestArgsIncludesTagsAndNoRaceOverride(t *testing.T) {
-	cfg = Config{
+	cfg := Config{
 		CoverProfile:  "coverage.out",
 		TestTimeout:   "180s",
 		BuildTags:     "sqlite_fts5 race_heavy",
 		RaceDetection: false,
 	}
 
-	args := buildTestArgs([]string{"./internal/api"})
+	args := buildTestArgs(cfg, []string{"./internal/api"})
 	want := []string{
 		"test", "./internal/api", "-json", "-covermode=atomic", "-coverprofile=coverage.out",
 		"-timeout=180s", "-tags", "sqlite_fts5 race_heavy",

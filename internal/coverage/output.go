@@ -2,13 +2,14 @@ package coverage
 
 import (
 	"fmt"
+	"io"
 	"strings"
 )
 
 // printUncoveredHeader prints the header for uncovered blocks output
-func printUncoveredHeader(locWidth int, printDescription bool) {
+func printUncoveredHeader(out io.Writer, locWidth int, printDescription bool) {
 	if printDescription {
-		fmt.Println(`# Uncovered Code Ranges (from Go coverage)
+		fmt.Fprintln(out, `# Uncovered Code Ranges (from Go coverage)
 #
 # Format:
 #   <file>:(startLine,startCol)-(endLine,endCol)
@@ -32,16 +33,16 @@ func printUncoveredHeader(locWidth int, printDescription bool) {
 
 Details:`)
 	} else {
-		fmt.Println("# Uncovered Code Ranges (from Go coverage)")
+		fmt.Fprintln(out, "# Uncovered Code Ranges (from Go coverage)")
 	}
 	separator := strings.Repeat("-", locWidth+30)
-	fmt.Println(separator)
-	fmt.Printf("%-*s %-6s %-6s %-10s %s\n", locWidth, "LOCATION", "LINES", "EFFECT", "STATUS", "FIX ACTION")
-	fmt.Println(separator)
+	fmt.Fprintln(out, separator)
+	fmt.Fprintf(out, "%-*s %-6s %-6s %-10s %s\n", locWidth, "LOCATION", "LINES", "EFFECT", "STATUS", "FIX ACTION")
+	fmt.Fprintln(out, separator)
 }
 
 // printBlocks prints the analyzed blocks with formatting
-func printBlocks(merged []MergedBlock, maxLocWidth int, limit int) {
+func printBlocks(out io.Writer, merged []MergedBlock, maxLocWidth int, limit int, colorEnabled, ciMode bool) {
 	count := 0
 	printedNonCritical := false
 
@@ -59,7 +60,7 @@ func printBlocks(merged []MergedBlock, maxLocWidth int, limit int) {
 		shouldPrint := isCritical || count < limit || !printedNonCritical
 
 		if shouldPrint {
-			b.Print(maxLocWidth)
+			b.Print(out, maxLocWidth, colorEnabled, ciMode)
 			count++
 			if !isCritical {
 				printedNonCritical = true
@@ -84,7 +85,7 @@ func printBlocks(merged []MergedBlock, maxLocWidth int, limit int) {
 	remaining -= count
 
 	if remaining > 0 {
-		fmt.Printf("... %d more ...\n", remaining)
+		fmt.Fprintf(out, "... %d more ...\n", remaining)
 	}
 }
 

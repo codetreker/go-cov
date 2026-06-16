@@ -14,5 +14,5 @@ func main() {
 		os.Exit(2)
 	}
 
-	os.Exit(coverage.Run(cfg))
+	os.Exit(coverage.Run(os.Stdout, cfg))
 }
