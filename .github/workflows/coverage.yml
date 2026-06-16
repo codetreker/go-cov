@@ -1,0 +1,26 @@
+name: coverage
+
+# go-cov gates its own repository (dogfooding). The job runs the repo's own
+# go-cov binary on the repo; GitHub Actions sets CI=true, so go-cov runs in CI
+# mode (GitHub error annotations, non-zero exit on threshold violations) and
+# reads thresholds from .go-cov.toml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go-cov:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Coverage gate
+        run: go run ./cmd/go-cov
