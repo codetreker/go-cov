@@ -51,6 +51,7 @@ func parseLine(line string, c Config) (Block, bool) {
 	endLine, _ := strconv.Atoi(endParts[0])
 	endCol, _ := strconv.Atoi(endParts[1])
 
+	numStmt, _ := strconv.Atoi(parts[1])
 	count, _ := strconv.Atoi(parts[2])
 
 	return Block{
@@ -59,6 +60,7 @@ func parseLine(line string, c Config) (Block, bool) {
 		StartCol:  startCol,
 		EndLine:   endLine,
 		EndCol:    endCol,
+		NumStmt:   numStmt,
 		Count:     count,
 	}, true
 }
