@@ -37,6 +37,8 @@ The module prefix is detected with `go list -m` and stripped from displayed path
 
 `go-cov` intentionally does not expose `go test -coverpkg`. Coverage should use Go's default package coverage universe for the selected packages, with policy exceptions expressed as explicit excludes.
 
+Excludes are applied uniformly across every dimension. When a file or function is excluded (`exclude.files`, `exclude.funcs`, `exclude.func_suffixes`), its statements are removed from the **total** and **per-package** percentages as well as from the function list and the uncovered-block report — so excluding `foo.go` makes it disappear from the gate entirely, not just from the per-function output. Likewise, `exclude.packages` packages are never built or measured, so they never appear anywhere.
+
 ## Configuration
 
 By default, `go-cov` reads `.go-cov.toml` from the current working directory. Use `--config path/to/file.toml` to load a different file.

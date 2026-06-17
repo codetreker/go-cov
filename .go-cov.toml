@@ -9,8 +9,8 @@
 project = "go-cov"
 
 [thresholds]
-total = 55    # current ~55%; do not let overall coverage drop below this
-package = 55  # current ~55% for internal/coverage
+total = 55    # ratchet floor; actual ~65% once excludes apply — raise as coverage grows
+package = 55  # ratchet floor; actual ~65% for internal/coverage after excludes
 function = 0  # per-function gate disabled for now (AST analysis not yet covered)
 print = 80    # still list functions below 80% in the report, informationally
 
@@ -20,9 +20,9 @@ timeout = "5m"
 
 [exclude]
 # Integration-level code that drives `go test` / `go tool cover` subprocesses and
-# the CLI entrypoint. It is exercised end-to-end, not by unit tests, so keep it
-# out of the per-file CRITICAL report (it does not change the total/package
-# numbers, which still gate overall coverage).
+# the CLI entrypoint. It is exercised end-to-end, not by unit tests. Excluding it
+# removes these from every coverage dimension — total, per-package, per-function,
+# and the uncovered-block report — so the gate measures only unit-testable code.
 files = ["run.go", "cmd/"]
 
 [critical_blocks]

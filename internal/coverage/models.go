@@ -12,7 +12,8 @@ type Block struct {
 	StartCol  int
 	EndLine   int
 	EndCol    int
-	Count     int
+	NumStmt   int // number of statements in the block (used to weight coverage)
+	Count     int // execution count (>0 means covered)
 }
 
 // MergedBlock represents a merged uncovered code block

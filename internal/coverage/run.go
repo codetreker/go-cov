@@ -3,7 +3,6 @@
 package coverage
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -76,6 +75,19 @@ func Run(out io.Writer, c Config) int {
 	fmt.Fprintln(out, strings.Repeat("=", 80))
 	fmt.Fprintln(out)
 
+	// Load coverage blocks once and recompute per-package and total coverage from
+	// statement counts. The same exclusion-filtered blocks feed every dimension, so
+	// an excluded file or function is dropped from the package summary, the total,
+	// and the uncovered-block report — not just the function list.
+	astCache := NewASTCache()
+	fileCache := NewFileCache()
+	blocks, blocksErr := loadCoverageBlocks(cfg, astCache)
+	if blocksErr != nil {
+		fmt.Fprintf(os.Stderr, "Error reading coverage profile: %v\n", blocksErr)
+	}
+	totalCoverage, perPackageCoverage := aggregateCoverage(blocks)
+	applyComputedPackageCoverage(results, perPackageCoverage, cfg)
+
 	// Print package coverage summary
 	hasCriticalPackage := printPackageSummary(out, cfg, results, topLevelCounts, subTestCounts)
 
@@ -83,14 +95,21 @@ func Run(out io.Writer, c Config) int {
 		return exitCode
 	}
 
-	// Get function coverage data from a single `go tool cover -func` invocation,
-	// deriving both the per-function list and the total from the same output.
+	// Function coverage details still come from `go tool cover -func`; that
+	// per-function list already honors the configured exclusions.
 	funcOutput, err := runFuncCoverage(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error getting function coverage: %v\n", err)
 	}
 	funcData := parseFunctionCoverageOutput(funcOutput, cfg)
-	totalCov, totalKnown := parseTotalCoverageOutput(funcOutput)
+
+	// Total coverage comes from the exclusion-filtered profile so excluded files
+	// and functions are removed from it. Fall back to Go's reported total only
+	// when the profile could not be read.
+	totalCov, totalKnown := totalCoverage.percent()
+	if blocksErr != nil {
+		totalCov, totalKnown = parseTotalCoverageOutput(funcOutput)
+	}
 
 	// Print function coverage details
 	hasCriticalFunc, funcWidth := printFunctionCoverage(out, cfg, funcData)
@@ -109,7 +128,7 @@ func Run(out io.Writer, c Config) int {
 	// Analyze uncovered blocks
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, strings.Repeat("-", 90))
-	hasCriticalBlocks := analyzeUncoveredBlocks(out, cfg)
+	hasCriticalBlocks := analyzeUncoveredBlocks(out, cfg, blocks, astCache, fileCache)
 
 	// In CI mode, exit with error if any CRITICAL issues
 	if cfg.CIMode && (hasCriticalPackage || hasCriticalFunc || hasCriticalTotal || (cfg.FailOnCriticalBlocks && hasCriticalBlocks)) {
@@ -253,45 +272,13 @@ func generateHTMLReport(ctx context.Context, cfg Config) {
 	}
 }
 
-// analyzeUncoveredBlocks parses coverage file and analyzes uncovered blocks
-// Returns true if any CRITICAL blocks found
-func analyzeUncoveredBlocks(out io.Writer, cfg Config) bool {
-	file, err := os.Open(cfg.CoverProfile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening coverage file: %v\n", err)
-		return false
-	}
-	defer file.Close()
-
-	var blocks []Block
-	scanner := bufio.NewScanner(file)
-
-	// Skip mode line
-	if scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "mode:") {
-			if b, ok := parseLine(line, cfg); ok {
-				blocks = append(blocks, b)
-			}
-		}
-	}
-
-	for scanner.Scan() {
-		if b, ok := parseLine(scanner.Text(), cfg); ok {
-			blocks = append(blocks, b)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading coverage file: %v\n", err)
-		return false
-	}
-
-	fileCache := NewFileCache()
+// analyzeUncoveredBlocks merges and AST-classifies the supplied coverage blocks
+// (already filtered for excluded files and functions) and prints the
+// uncovered-block report. Returns true if any CRITICAL blocks were found.
+func analyzeUncoveredBlocks(out io.Writer, cfg Config, blocks []Block, astCache *ASTCache, fileCache *FileCache) bool {
 	merged := mergeBlocks(blocks, fileCache)
 
 	// Analyze blocks using AST
-	astCache := NewASTCache()
 	for i := range merged {
 		AnalyzeBlockWithAST(&merged[i], astCache, fileCache)
 	}

@@ -19,6 +19,20 @@ func TestParseLineTrimsModulePrefix(t *testing.T) {
 	}
 }
 
+func TestParseLineParsesStatementCount(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{ModulePrefix: "github.com/codetrek/haystack/"}
+	block, ok := parseLine("github.com/codetrek/haystack/internal/foo.go:10.2,12.1 3 0", cfg)
+	if !ok {
+		t.Fatal("parseLine() returned ok=false")
+	}
+	// The middle field (3) is the statement count, needed for weighting coverage.
+	if block.NumStmt != 3 {
+		t.Fatalf("block.NumStmt = %d, want 3", block.NumStmt)
+	}
+}
+
 func TestParseLineSkipsExcludedFile(t *testing.T) {
 	t.Parallel()
 
