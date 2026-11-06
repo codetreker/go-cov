@@ -105,6 +105,8 @@ Optional metadata keys:
 - `project`
 - `module_prefix`
 
+`critical_blocks.fail` defaults to `true`: uncovered blocks are analyzed and printed, and CRITICAL blocks fail CI. Set it to `false` to disable the uncovered-block report, including its header and CI error annotations, and the critical-block CI gate. Package, function, and total coverage thresholds still apply. The same behavior is controlled by `FAIL_ON_CRITICAL_BLOCKS` and `--fail-on-critical-blocks`.
+
 `exclude.func_suffixes` defaults to `["ForTest"]` (test helpers that live in non-test files). Set it to `[]` to disable, or override it with your own suffixes.
 
 ## Environment Compatibility

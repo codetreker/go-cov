@@ -125,13 +125,15 @@ func Run(out io.Writer, c Config) int {
 		generateHTMLReport(ctx, cfg)
 	}
 
-	// Analyze uncovered blocks
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, strings.Repeat("-", 90))
-	hasCriticalBlocks := analyzeUncoveredBlocks(out, cfg, blocks, astCache, fileCache)
+	hasCriticalBlocks := false
+	if cfg.FailOnCriticalBlocks {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, strings.Repeat("-", 90))
+		hasCriticalBlocks = analyzeUncoveredBlocks(out, cfg, blocks, astCache, fileCache)
+	}
 
 	// In CI mode, exit with error if any CRITICAL issues
-	if cfg.CIMode && (hasCriticalPackage || hasCriticalFunc || hasCriticalTotal || (cfg.FailOnCriticalBlocks && hasCriticalBlocks)) {
+	if cfg.CIMode && (hasCriticalPackage || hasCriticalFunc || hasCriticalTotal || hasCriticalBlocks) {
 		return 1
 	}
 
