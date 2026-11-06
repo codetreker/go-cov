@@ -26,4 +26,4 @@ timeout = "5m"
 files = ["run.go", "cmd/"]
 
 [critical_blocks]
-fail = false  # remaining uncovered CRITICAL blocks (AST analysis) are known debt; don't fail CI yet
+fail = false  # disable the AST uncovered-block report and its CI gate while coverage debt remains

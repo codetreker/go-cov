@@ -37,7 +37,7 @@ type Config struct {
 	TestTimeout          string   // go test timeout value
 	BuildTags            string   // Build tags passed to go test
 	GenerateHTML         bool     // Generate local HTML coverage report when not in CI mode
-	FailOnCriticalBlocks bool     // In CI mode, fail on AST critical uncovered blocks
+	FailOnCriticalBlocks bool     // Report AST uncovered blocks and fail CI on critical blocks
 	UncoveredLimit       int      // Max uncovered blocks to show
 	ShowTestCounts       bool     // Show TESTS column in package summary
 	ColorEnabled         bool     // Emit ANSI color escapes (false when NO_COLOR is set or the output writer is not a terminal)
@@ -214,7 +214,7 @@ func ConfigFromEnv(args []string) (Config, error) {
 	ciMode := fs.Bool("ci", c.CIMode, "enable CI/GitHub Actions error output")
 	raceDetection := fs.Bool("race", c.RaceDetection, "enable go test -race")
 	generateHTML := fs.Bool("generate-html", c.GenerateHTML, "generate local HTML coverage report outside CI")
-	failOnCriticalBlocks := fs.Bool("fail-on-critical-blocks", c.FailOnCriticalBlocks, "fail CI on AST critical uncovered blocks")
+	failOnCriticalBlocks := fs.Bool("fail-on-critical-blocks", c.FailOnCriticalBlocks, "report AST uncovered blocks and fail CI on critical blocks")
 	showTestCounts := fs.Bool("show-test-counts", c.ShowTestCounts, "show TESTS column in package summary")
 
 	if err := fs.Parse(remainingArgs); err != nil {
